@@ -1,0 +1,14 @@
+{
+  "name": "ptiris-slides",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "workspaces": ["decks/*"],
+  "scripts": {
+    "dev": "node scripts/deck.mjs dev",
+    "build": "node scripts/build.mjs",
+    "export": "node scripts/deck.mjs export"
+  }
+}

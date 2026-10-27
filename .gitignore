@@ -1,0 +1,14 @@
+node_modules/
+dist/
+evidence/
+.local/
+.DS_Store
+*.local
+*.log
+.vite-inspect/
+.remote-assets/
+components.d.ts
+
+# Local reference files and the compatibility link to the original deck path.
+/Ref/
+/slidev

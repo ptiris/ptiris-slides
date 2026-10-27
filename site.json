@@ -1,0 +1,11 @@
+{
+  "title": "ptiris' slides",
+  "base": "/ptiris-slides/",
+  "decks": [
+    {
+      "slug": "inference-infra",
+      "title": "Introduction to Inference Infra",
+      "description": "从模型评测与机器人任务出发，理解推理中的计算、网络与存储。"
+    }
+  ]
+}

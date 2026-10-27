@@ -1,0 +1,526 @@
+/* Local fonts */
+@font-face {
+  font-family: 'LXGW WenKai';
+  src: url('/fonts/lxgw-wenkai-regular.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'LXGW WenKai';
+  src: url('/fonts/lxgw-wenkai-medium.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+}
+
+/* Shared design tokens */
+:root {
+  --deck-font: 'LXGW WenKai', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --deck-paper: #fff;
+  --deck-ink: #24272b;
+  --deck-muted: #5d6672;
+  --deck-line: #d6d9df;
+  --deck-surface: #f3f5f7;
+  --deck-accent: #315e9b;
+  --deck-accent-light: #e5edf9;
+  --deck-accent-border: #7495c2;
+  --deck-warm: #8f5a18;
+  --deck-warm-light: #fff3dc;
+  --deck-warm-border: #c5964c;
+  --deck-flow: #687482;
+  --deck-gutter: 56px;
+  --deck-title-size: 40px;
+  --deck-body-size: 27px;
+  --deck-aside-ratio: 1.94fr 1fr;
+  --slidev-theme-primary: var(--deck-accent);
+}
+
+/* One reusable layout; slide text lives in Markdown slots. */
+.slidev-layout.lecture-slide {
+  display: grid;
+  grid-template-rows: 86px minmax(0, 1fr) 42px;
+  position: relative;
+  overflow: hidden;
+  height: 100%;
+  padding: 0;
+  background: var(--deck-paper);
+  color: var(--deck-ink);
+  font-family: var(--deck-font);
+  font-size: var(--deck-body-size);
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+}
+.lecture-title {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--deck-gutter);
+  border-bottom: 3px solid #8a8d93;
+  background: var(--deck-ink);
+  color: var(--deck-paper);
+}
+.lecture-slide .lecture-title h1 {
+  margin: 0;
+  font-family: inherit;
+  color: inherit;
+  font-size: var(--deck-title-size);
+  font-weight: 500;
+  line-height: 1.2;
+}
+.lecture-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 30px var(--deck-gutter) 44px;
+}
+.lecture-slide p {
+  margin: 0;
+  opacity: 1;
+  line-height: 1.55;
+}
+.lecture-lead p { line-height: 1.7; }
+.lecture-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 34px;
+  margin-top: 30px;
+}
+.lecture-columns.has-aside { grid-template-columns: var(--deck-aside-ratio); }
+.lecture-main, .lecture-aside { min-width: 0; }
+.lecture-aside {
+  min-height: 262px;
+  border-left: 1px solid var(--deck-line);
+  padding-left: 30px;
+  font-size: 26px;
+}
+.lecture-slide h2 {
+  margin: 0 0 20px;
+  color: var(--deck-ink);
+  font-family: inherit;
+  font-size: 26px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.lecture-slide h3 {
+  margin: 25px 0 8px;
+  color: inherit;
+  font-family: inherit;
+  font-size: 26px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.lecture-slide .tone-accent { color: var(--deck-accent); }
+.result-gap { margin-top: 33px; }
+.lecture-takeaway {
+  margin-top: auto;
+  border-left: 4px solid var(--deck-accent);
+  padding: 14px 20px;
+  font-size: 29px;
+  font-weight: 500;
+}
+.lecture-takeaway p { line-height: 1.5; }
+.lecture-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--deck-gutter);
+  background: var(--deck-ink);
+  color: var(--deck-paper);
+  font-size: 18px;
+}
+/* Markdown may wrap an inline footer in a paragraph. */
+.lecture-footer > p {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+}
+
+/* State comparison: an ordinary Markdown table with active cells. */
+.state-matrix { --state-label-width: 76px; }
+.state-matrix table {
+  table-layout: fixed;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-collapse: separate;
+  border-spacing: 5px 10px;
+  font-size: 23px;
+}
+.state-matrix th, .state-matrix td {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  line-height: 1.5;
+}
+.state-matrix th {
+  color: var(--deck-muted);
+  font-weight: 400;
+  font-size: 22px;
+  white-space: nowrap;
+}
+.state-matrix th:first-child, .state-matrix td:first-child { width: var(--state-label-width); }
+.state-matrix td:first-child { color: var(--deck-ink); white-space: nowrap; }
+.state-matrix td:not(:first-child) {
+  height: 59px;
+  border: 1px solid var(--deck-line);
+  border-radius: 3px;
+  background: var(--deck-surface);
+  color: var(--deck-muted);
+}
+.state-matrix td:has(.state-active) {
+  border-color: var(--deck-accent-border);
+  background: var(--deck-accent-light);
+  color: var(--deck-accent);
+  font-weight: 500;
+}
+
+/* Feedback flow: ordinary HTML nodes, CSS arrows, and an editable caption. */
+.flow-cycle {
+  --flow-count: 3;
+  --flow-gap: 50px;
+  --flow-node-width: calc((100% - (var(--flow-count) - 1) * var(--flow-gap)) / var(--flow-count));
+  margin: 38px 0 0;
+}
+.flow-row {
+  display: flex;
+  align-items: center;
+}
+.flow-node {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 112px;
+  padding: 16px 8px;
+  border: 1.3px solid var(--deck-line);
+  border-radius: 4px;
+  background: var(--deck-surface);
+  text-align: center;
+}
+.lecture-slide .flow-node h3 { margin: 0 0 12px; font-size: 27px; }
+.lecture-slide .flow-node p { font-size: 23px; line-height: 1.4; color: var(--deck-muted); }
+.flow-node.tone-warm { border-color: var(--deck-warm-border); background: var(--deck-warm-light); }
+.lecture-slide .flow-node.tone-accent { border-color: var(--deck-accent-border); background: var(--deck-accent-light); color: var(--deck-ink); }
+.flow-arrow {
+  display: block;
+  flex: 0 0 calc(var(--flow-gap) - 16px);
+  position: relative;
+  height: 0;
+  border-top: 1.7px solid var(--deck-flow);
+  margin: 0 8px;
+}
+.flow-arrow::after {
+  content: '';
+  position: absolute;
+  right: 1px;
+  top: -5px;
+  width: 8px;
+  height: 8px;
+  border-right: 1.7px solid var(--deck-flow);
+  border-top: 1.7px solid var(--deck-flow);
+  transform: rotate(45deg);
+}
+.flow-return {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  height: 55px;
+  margin: 0 calc(var(--flow-node-width) / 2) 18px;
+  border: 1.7px solid var(--deck-flow);
+  border-top: 0;
+  font-size: 24px;
+  color: var(--deck-muted);
+  text-align: center;
+}
+.flow-return::before {
+  content: '';
+  position: absolute;
+  left: -5px;
+  top: 3px;
+  width: 8px;
+  height: 8px;
+  border-top: 1.7px solid var(--deck-flow);
+  border-left: 1.7px solid var(--deck-flow);
+  transform: rotate(45deg);
+}
+.flow-return > span {
+  position: relative;
+  padding: 0 18px;
+  background: var(--deck-paper);
+  transform: translateY(50%);
+  line-height: 1.4;
+}
+
+/* Media nodes reuse the flow layout; images and alt text stay in slides.md. */
+.flow-with-media { margin-top: 24px; }
+.flow-node.has-media { padding: 12px 10px 10px; }
+.lecture-slide .flow-node.has-media h3 { margin-bottom: 10px; }
+.flow-image {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  object-position: center;
+  border-radius: 2px;
+}
+.flow-with-media .flow-return { height: 35px; }
+
+/* Full-width diagrams reuse the lecture layout, with all labels in Markdown. */
+.lecture-slide.diagram-page .lecture-body {
+  justify-content: center;
+  padding-top: 24px;
+  padding-bottom: 34px;
+}
+.lecture-slide.diagram-page .lecture-columns { margin-top: 0; }
+.lecture-slide.diagram-page .lecture-lead + .lecture-columns { margin-top: 26px; }
+.lecture-slide.question-led .lecture-body { justify-content: flex-start; }
+.lecture-slide.question-led .lecture-lead + .lecture-columns { margin-top: 32px; }
+.question-strip {
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  align-items: center;
+  gap: 32px;
+  min-height: 96px;
+  padding: 12px 26px;
+  border-left: 4px solid var(--deck-accent);
+  background: #f1f4f8;
+}
+.question-context { display: flex; flex-direction: column; line-height: 1.3; }
+.question-context > span { color: var(--deck-muted); font-size: 24px; }
+.question-context > strong { color: var(--deck-accent); font-size: 30px; font-weight: 500; }
+.lecture-slide .question-strip > p {
+  padding: 5px 0 5px 32px;
+  border-left: 1px solid #cbd4e1;
+  color: var(--deck-ink);
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.lecture-slide.question-led .map-caption { color: var(--deck-accent); font-weight: 500; }
+.system-map { position: relative; width: 100%; height: 440px; margin: 0; }
+.system-map.compact-map { height: 400px; }
+.map-wires { position: absolute; inset: 0; width: 100%; height: 100%; }
+.map-wires path { fill: none; stroke: var(--deck-flow); stroke-width: 1.8px; }
+.map-wires .map-placement-wire { stroke-dasharray: 6 4; }
+.map-object { position: absolute; text-align: center; }
+.lecture-slide .map-object h3 { margin: 0 0 14px; font-size: 29px; line-height: 1.4; }
+.map-model { display: block; width: 126px; height: 62px; margin: auto; }
+.map-model rect { fill: var(--deck-accent-light); stroke: var(--deck-accent-border); stroke-width: 1.6px; }
+.map-model path { fill: none; stroke: var(--deck-accent-border); stroke-width: 1.3px; }
+.lecture-slide .map-caption {
+  position: absolute;
+  padding: 2px 4px;
+  background: var(--deck-paper);
+  color: var(--deck-muted);
+  font-size: 26px;
+  line-height: 1.4;
+  text-align: center;
+  white-space: nowrap;
+}
+.map-request-stack { display: grid; gap: 10px; width: 128px; margin: 0 0 0 auto; }
+.map-request-stack i { display: block; height: 16px; border: 1.3px solid var(--deck-line); background: var(--deck-surface); }
+.map-accelerator { height: 180px; padding: 21px 17px; border: 1.5px solid var(--deck-flow); border-radius: 3px; background: var(--deck-paper); }
+.map-memory { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
+.memory-region { display: flex; align-items: center; justify-content: center; height: 66px; border: 1.3px solid var(--deck-accent-border); background: var(--deck-accent-light); color: var(--deck-accent); font-size: 26px; }
+.memory-region.is-state { border-color: var(--deck-warm-border); background: var(--deck-warm-light); color: var(--deck-warm); }
+.map-destination { display: flex; align-items: center; justify-content: center; min-height: 72px; border: 1.5px solid var(--deck-line); border-radius: 3px; background: var(--deck-surface); }
+.lecture-slide .map-destination h3 { margin: 0; }
+
+/* Aligned system comparisons, with concrete queues and hardware silhouettes. */
+.comparison-map { height: 510px; }
+.map-wires .map-comparison-wire { stroke: var(--deck-line); stroke-dasharray: 5 5; }
+.object-drawing { display: block; margin: auto; }
+.object-drawing path, .object-drawing rect { fill: none; stroke: var(--deck-accent-border); stroke-width: 1.6px; }
+.object-drawing .drawing-paper { fill: var(--deck-paper); }
+.object-drawing .drawing-accent { fill: var(--deck-accent-light); }
+.object-drawing .drawing-accent-stroke { stroke: var(--deck-accent); stroke-width: 2.5px; }
+.execution-zone { height: 126px; padding: 15px 24px; border: 1.4px solid var(--deck-line); border-radius: 3px; background: var(--deck-surface); }
+.lecture-slide .execution-zone h3 { margin-bottom: 14px; }
+.queue-row { display: flex; align-items: center; justify-content: center; gap: 22px; font-size: 25px; color: var(--deck-muted); }
+.queue-cells { display: flex; gap: 8px; }
+.queue-cells i { width: 48px; height: 25px; border: 1.3px solid var(--deck-accent-border); background: var(--deck-accent-light); }
+.queue-cells i:first-child { border-color: var(--deck-warm-border); background: var(--deck-warm-light); }
+.hardware-object { display: flex; flex-direction: column; align-items: center; }
+.lecture-slide .hardware-object h3 { margin: 9px 0 0; font-size: 26px; }
+.processor-icon { position: relative; display: grid; place-items: center; width: 112px; height: 104px; }
+.processor-icon::before, .processor-icon::after { content: ''; position: absolute; background: repeating-linear-gradient(90deg,var(--deck-flow) 0 2px,transparent 2px 12px); }
+.processor-icon::before { left: 19px; right: 19px; top: 0; bottom: 0; }
+.processor-icon::after { left: 4px; right: 4px; top: 15px; bottom: 15px; transform: rotate(90deg); }
+.processor-cells { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(2,1fr); gap: 6px; width: 88px; height: 80px; padding: 10px; background: var(--deck-paper); border: 1.6px solid var(--deck-flow); border-radius: 2px; }
+.processor-cells i { display: block; border: 1px solid var(--deck-accent-border); background: var(--deck-accent-light); }
+.processor-cells.is-dense { grid-template-columns: repeat(4,1fr); gap: 3px; padding: 8px; }
+.memory-stick { position: relative; display: flex; align-items: center; justify-content: center; gap: 8px; width: 136px; height: 80px; border: 1.5px solid var(--deck-flow); border-radius: 2px; background: var(--deck-paper); }
+.memory-stick i { display: block; width: 29px; height: 42px; border: 1.3px solid var(--deck-warm-border); background: var(--deck-warm-light); }
+.memory-stick::after { content: ''; position: absolute; bottom: -8px; left: 14px; right: 14px; height: 8px; background: repeating-linear-gradient(90deg,var(--deck-flow) 0 5px,transparent 5px 11px); }
+.memory-stick + h3 { padding-top: 12px; }
+
+/* Three visual arguments leading to one shared outcome. */
+.diagram-triptych { position: relative; width: 100%; height: 510px; margin: 0; }
+.diagram-panels { position: relative; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 44px; padding-top: 15px; }
+.diagram-panel { min-width: 0; text-align: center; }
+.lecture-slide .diagram-panel h2 { margin: 0 0 20px; color: var(--deck-accent); font-size: 31px; font-weight: 500; line-height: 1.4; }
+.mini-diagram { position: relative; width: 100%; height: 220px; }
+.mini-wires { position: absolute; inset: 0; width: 100%; height: 100%; }
+.object-drawing .drawing-neutral { stroke: var(--deck-flow); }
+.object-drawing .drawing-guide { stroke: var(--deck-line); stroke-dasharray: 4 4; }
+.object-drawing .drawing-warm { fill: var(--deck-warm-light); stroke: var(--deck-warm-border); stroke-width: 1.6px; }
+.object-drawing .drawing-warm-stroke { fill: none; stroke: var(--deck-warm-border); stroke-width: 1.8px; }
+.mini-label { position: absolute; color: var(--deck-muted); font-size: 24px; line-height: 1.4; text-align: center; white-space: nowrap; }
+.mini-label.is-warm { color: var(--deck-warm); }
+.lecture-slide .diagram-question { display: flex; align-items: center; justify-content: center; min-height: 82px; margin-top: 14px; font-size: 28px; font-weight: 500; line-height: 1.45; }
+.map-wires .diagram-collector { stroke: var(--deck-accent-border); }
+.diagram-outcome { position: absolute; left: 184px; right: 184px; top: 444px; display: flex; align-items: center; justify-content: center; height: 66px; border-left: 4px solid var(--deck-accent); background: #f1f4f8; color: var(--deck-ink); font-size: 31px; font-weight: 500; }
+
+/* Code, mathematical dependencies, and an expanded hardware execution path. */
+.execution-map { position: relative; width: 100%; height: 510px; margin: 0; }
+.lecture-slide .execution-map .diagram-heading { position: absolute; margin: 0; color: var(--deck-accent); font-size: 30px; line-height: 1.4; }
+.lecture-slide .execution-map .diagram-subject { position: absolute; color: var(--deck-muted); font-size: 24px; line-height: 1.4; }
+.source-excerpt { position: absolute; }
+.lecture-slide .source-excerpt code { display: block; padding: 0; border: 0; background: transparent; color: var(--deck-ink); font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 23px; line-height: 34px; }
+.source-line { display: block; padding-left: 10px; white-space: pre; }
+.source-line.is-traced { border-left: 3px solid var(--deck-accent); padding-left: 7px; background: var(--deck-accent-light); color: var(--deck-accent); }
+.execution-drawing { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.execution-drawing path { fill: none; stroke: var(--deck-flow); stroke-width: 1.6px; }
+.execution-drawing text { fill: var(--deck-ink); font-family: var(--deck-font); font-size: 26px; text-anchor: middle; }
+.execution-drawing .annotation { fill: var(--deck-muted); font-size: 23px; }
+.execution-drawing .operation-label { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 21px; }
+.execution-drawing .operation { fill: var(--deck-surface); stroke: var(--deck-line); stroke-width: 1.4px; }
+.execution-drawing .traced-operation, .execution-drawing .tile { fill: var(--deck-accent-light); stroke: var(--deck-accent-border); stroke-width: 1.5px; }
+.execution-drawing .trace-line, .execution-drawing .trace-guide { stroke: var(--deck-accent-border); }
+.execution-drawing .trace-guide { stroke-dasharray: 5 4; }
+.execution-drawing .trace-text, .execution-drawing .block-label { fill: var(--deck-accent); }
+.execution-drawing .block-label { font-size: 22px; }
+.execution-drawing .tensor-equation { font-size: 23px; }
+.execution-drawing .equation-focus { fill: #f1f4f8; stroke: none; }
+.execution-drawing .math-symbol { font-size: 31px; }
+.execution-drawing .hardware-boundary { fill: none; stroke: var(--deck-line); stroke-width: 1.5px; }
+.execution-drawing .compute-unit { fill: var(--deck-paper); stroke: var(--deck-flow); stroke-width: 1.5px; }
+.execution-drawing .memory-region-drawing { fill: var(--deck-warm-light); stroke: var(--deck-warm-border); stroke-width: 1.5px; }
+.execution-drawing .memory-line { stroke: var(--deck-warm-border); }
+.execution-drawing .memory-text { fill: var(--deck-warm); font-size: 23px; }
+.lecture-slide svg marker path.arrowhead {
+  fill: none;
+  stroke: context-stroke;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: none;
+}
+.lecture-slide svg path[marker-end], .lecture-slide svg path[marker-start] { stroke-linejoin: round; }
+.execution-map .diagram-outcome { left: 0; right: 0; top: 454px; height: 56px; font-size: 30px; }
+
+/* Editable, click-driven diagrams: content and step expressions live in slides.md. */
+.gemm-figure { position: relative; width: 100%; height: 510px; margin: 0; }
+.lecture-slide .gemm-context { position: absolute; left: 0; top: 0; margin: 0; font-size: 26px; line-height: 1.4; }
+.gemm-takeaway { position: absolute; left: 0; right: 0; top: 454px; height: 56px; display: flex; align-items: center; justify-content: center; border-left: 4px solid var(--deck-accent); background: #f1f4f8; font-size: 29px; font-weight: 500; }
+.gemm-drawing .matrix-name { font-size: 27px; }
+.gemm-drawing .left-label { text-anchor: start; }
+.gemm-drawing .matrix-base { fill: var(--deck-surface); stroke: var(--deck-line); stroke-width: 1.5px; }
+.gemm-drawing .grid-line { stroke: #bcc9db; stroke-width: 1px; }
+.gemm-drawing .k-window { fill: var(--deck-warm-light); stroke: var(--deck-warm-border); stroke-width: 2px; transition: transform 450ms ease; }
+.gemm-drawing .output-window { fill: transparent; stroke: var(--deck-accent-border); stroke-width: 2px; transition: fill 300ms; }
+.gemm-drawing .output-window.is-complete, .gemm-drawing .output-tile { fill: var(--deck-accent-light); stroke: var(--deck-accent-border); stroke-width: 1.5px; }
+.gemm-drawing .cache-box { fill: var(--deck-surface); stroke: var(--deck-line); stroke-width: 1.5px; }
+.gemm-drawing .operand-buffer { fill: var(--deck-paper); stroke: var(--deck-warm-border); stroke-width: 1.5px; }
+.gemm-drawing .tile-input, .gemm-drawing .resource-input { fill: var(--deck-warm-light); stroke: var(--deck-warm-border); stroke-width: 1.3px; }
+.gemm-drawing .compute-stage, .gemm-drawing .accumulator-stage { fill: var(--deck-paper); stroke: var(--deck-line); stroke-width: 1.5px; transition: fill 250ms, stroke 250ms; }
+.gemm-drawing .is-computing, .gemm-drawing .has-sum { fill: var(--deck-accent-light); stroke: var(--deck-accent-border); }
+.resident-operands { opacity: 0; transition: opacity 200ms; }
+.resident-operands.is-ready { opacity: 1; }
+.tile-walk[data-phase="1"] .resident-operands, .tile-walk[data-phase="3"] .resident-operands { transition-delay: 450ms; }
+.gemm-drawing .walk-read, .gemm-drawing .walk-compute, .gemm-drawing .walk-store { stroke: var(--deck-line); transition: stroke 250ms; }
+.tile-walk[data-phase="1"] .walk-read, .tile-walk[data-phase="3"] .walk-read { stroke: var(--deck-warm-border); stroke-width: 2.4px; }
+.tile-walk[data-phase="2"] .walk-compute, .tile-walk[data-phase="3"] .walk-compute, .tile-walk[data-phase="4"] .walk-store { stroke: var(--deck-accent); stroke-width: 2.4px; }
+.transfer-packet { animation: operand-transfer 650ms ease-in-out both; pointer-events: none; }
+@keyframes operand-transfer {
+  from { transform: translate(var(--packet-dx), var(--packet-dy)); opacity: .95; }
+  45% { transform: translate(var(--packet-via-x), var(--packet-via-y)); opacity: .95; }
+  85% { transform: translate(0, 0); opacity: .95; }
+  to { transform: translate(0, 0); opacity: 0; }
+}
+.larger-tile-reveal { opacity: 0; transition: opacity 350ms; }
+.larger-tile-reveal.is-revealed { opacity: 1; }
+.gemm-drawing .comparison-label { fill: var(--deck-muted); font-size: 24px; }
+.gemm-drawing .resource-value { font-size: 27px; }
+.gemm-drawing .resource-compute { fill: var(--deck-accent-light); stroke: var(--deck-accent-border); stroke-width: 1.3px; }
+.gemm-drawing .resource-register { fill: #dce4ef; stroke: var(--deck-flow); stroke-width: 1.3px; }
+.gemm-drawing .growing-register { transition: width 450ms ease; }
+.gemm-drawing .resource-focus .resource-register { fill: var(--deck-accent-light); stroke: var(--deck-accent); stroke-width: 2px; }
+.gemm-drawing .resource-focus .resource-value { fill: var(--deck-accent); }
+.scenario-rail { position: absolute; left: 0; right: 0; top: 47px; display: grid; justify-items: center; }
+.scenario-rail span { min-width: 480px; padding: 0 0 8px; border-bottom: 2px solid var(--deck-line); color: var(--deck-muted); font-size: 26px; text-align: center; }
+.scenario-rail .is-current { color: var(--deck-accent); border-bottom-color: var(--deck-accent); }
+.gemm-drawing .matrix-vary { transition: y 450ms ease, height 450ms ease; }
+.gemm-drawing .weight-fixed { fill: var(--deck-warm-light); stroke: var(--deck-warm-border); stroke-width: 1.5px; }
+.gemm-drawing .weight-label-paper { fill: var(--deck-warm-light); stroke: none; }
+.gemm-drawing .rule-line { stroke: var(--deck-line); }
+.gemm-drawing .metric-label { fill: var(--deck-muted); font-size: 24px; }
+.gemm-drawing .metric-value { font-size: 29px; }
+
+/* Request dependencies and numerical rooflines share the deck's editable SVG grammar. */
+.gemm-drawing .cache-label { font-size: 22px; fill: var(--deck-warm); }
+.gemm-drawing .cache-new { stroke-width: 2px; }
+.step-arrival { animation: step-arrival 250ms ease-out both; }
+@keyframes step-arrival { from { opacity: 0; } to { opacity: 1; } }
+.gemm-drawing .plot-axis { stroke: var(--deck-flow); stroke-width: 1.8px; }
+.gemm-drawing .plot-grid { stroke: #e5e8ed; stroke-width: 1px; }
+.gemm-drawing .plot-tick-line { stroke: var(--deck-flow); stroke-width: 1px; }
+.gemm-drawing .plot-tick { fill: var(--deck-muted); font-size: 22px; }
+.gemm-drawing .plot-y-tick { text-anchor: end; }
+.gemm-drawing .plot-axis-title { fill: var(--deck-muted); font-size: 23px; }
+.gemm-drawing .roof-memory { stroke: var(--deck-warm-border); stroke-width: 3.2px; }
+.gemm-drawing .roof-compute { stroke: var(--deck-accent); stroke-width: 3.2px; }
+.gemm-drawing .plot-guide { stroke: #9ba8b8; stroke-width: 1.2px; stroke-dasharray: 5 5; }
+.gemm-drawing .roof-projection { stroke: var(--deck-accent-border); stroke-width: 1.4px; stroke-dasharray: 4 4; }
+.gemm-drawing .roof-point { fill: var(--deck-paper); stroke: var(--deck-accent); stroke-width: 2.6px; }
+.gemm-drawing .moving-roof-point { transition: cx 450ms ease, cy 450ms ease; }
+.gemm-drawing .roof-estimate { fill: var(--deck-accent); font-size: 23px; }
+.gemm-drawing .pipeline-window { transition: width 450ms ease; }
+.gemm-drawing .pipeline-task { transition: x 450ms ease; }
+.gemm-drawing .pipeline-overlap { stroke: var(--deck-accent); stroke-width: 2px; }
+.gemm-drawing .metric-value.memory-text { font-size: 29px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .slidev-vclick-target { transition: none; }
+  .gemm-figure *, .gemm-figure *::before, .gemm-figure *::after { animation: none !important; transition: none !important; }
+  .transfer-packet { display: none; }
+}
+
+
+/* Multi-GPU diagrams use the same editable SVG and click states as GEMM pages. */
+.network-drawing .device { fill: #fff; stroke: #bdc5d0; stroke-width: 1.6px; }
+.network-drawing .capacity-outline { fill: #f3f5f7; stroke: #aeb7c4; stroke-width: 1.6px; }
+.network-drawing .capacity-growth { transition: width 500ms ease; }
+.network-drawing .budget-limit { stroke: #697584; stroke-width: 2px; stroke-dasharray: 6 5; }
+.network-drawing .label-paper { fill: #fff; stroke: none; }
+.network-drawing .hot-line { stroke: var(--deck-warm-border); stroke-width: 2.6px; }
+.network-drawing .quiet-line { stroke: #c6cdd6; stroke-width: 1.5px; }
+.network-drawing .hot-text { fill: var(--deck-warm); }
+.network-drawing .packet { fill: var(--deck-warm-light); stroke: var(--deck-warm-border); stroke-width: 1.6px; }
+.network-drawing .wait-region { fill: #f3f5f7; stroke: #bdc5d0; stroke-width: 1.4px; stroke-dasharray: 5 4; }
+
+.network-drawing .compact-label { font-size: 23px; }
+
+/* Internal fabric is distinct from the shared scale-out paths. */
+.scaleout-drawing .fabric-line { stroke: var(--deck-accent-border); stroke-width: 3px; }
+
+/* Address mapping is a logical region, distinct from a physical memory buffer. */
+.storage-drawing .address-window { fill: #f1f4f8; stroke: var(--deck-accent-border); stroke-width: 1.5px; stroke-dasharray: 6 4; }
+
+/* Cover and chapter pages show one title only; copy stays in slides.md. */
+.lecture-slide.cover-page, .lecture-slide.chapter-page { grid-template-rows: 1fr; }
+.cover-page .lecture-title, .chapter-page .lecture-title { justify-content: center; border-bottom: 0; text-align: center; }
+.lecture-slide.cover-page .lecture-title h1, .lecture-slide.chapter-page .lecture-title h1 { font-size: 48px; line-height: 1.45; }
+.cover-page .lecture-body, .chapter-page .lecture-body { display: none; }
+.outline-page .lecture-body { padding-top: 36px; padding-bottom: 42px; }
+.outline-page .lecture-columns { margin-top: 0; }
+.outline-map { display: flex; align-items: center; height: 510px; }
+.lecture-slide .outline-rows { width: 100%; list-style: none; padding: 0; margin: 0; }
+.outline-rows li { position: relative; display: grid; grid-template-columns: 315px minmax(0, 1fr); align-items: center; min-height: 105px; margin: 0; padding-left: 34px; border-bottom: 1px solid var(--deck-line); }
+.outline-rows li::before { content: ''; position: absolute; left: 0; top: 48px; width: 8px; height: 8px; border: 1.5px solid var(--deck-accent-border); background: var(--deck-accent-light); }
+.outline-rows li:last-child { border-bottom: 0; }
+.outline-topic { color: var(--deck-accent); font-size: 30px; font-weight: 500; }
+.outline-description { font-size: 28px; }
+.outline-page .lecture-footer, .outline-page .lecture-footer > p { justify-content: flex-end; }
