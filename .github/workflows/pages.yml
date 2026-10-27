@@ -29,9 +29,8 @@ jobs:
           path: dist
 
   deploy:
-    # Initialization only builds. Enable PUBLISH_PAGES after configuring Pages,
-    # or run this workflow manually to publish an explicit release.
-    if: github.ref == 'refs/heads/main' && (vars.PUBLISH_PAGES == 'true' || github.event_name == 'workflow_dispatch')
+    # Publish main automatically; pull requests only validate the build.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     permissions:

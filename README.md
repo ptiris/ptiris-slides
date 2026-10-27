@@ -77,7 +77,7 @@ dist/
 
 `site.json` 中的 `base` 默认是 `/ptiris-slides/`。每份报告使用自己的 `base` 和 hash 路由，支持直接分享某页，也能在 GitHub Pages 上刷新页面。图片与字体必须放在本报告的 `public/` 中，并用 Slidev/Vite 支持的资源引用方式。
 
-启用 GitHub Pages 后，网址为：
+GitHub Pages 网址：
 
 - 首页：`https://ptiris.github.io/ptiris-slides/`
 - 当前报告：`https://ptiris.github.io/ptiris-slides/inference-infra/`
@@ -87,15 +87,9 @@ dist/
 
 ## GitHub Pages 发布
 
-初始化阶段，每次推送到 `main` 或提交 Pull Request 都会构建并保存 Pages artifact，**尚不自动发布**。
+Pages 使用 **GitHub Actions** 发布。每次推送到 `main`，工作流会安装依赖、构建首页和所有报告，并自动部署。Pull Request 只验证构建，不发布网站。
 
-启用发布时：
-
-1. 在仓库 **Settings → Pages** 中选择 **GitHub Actions**。
-2. 将仓库 Actions 变量 `PUBLISH_PAGES` 设为 `true`。
-3. 推送到 `main`，或手动运行 **Build and deploy slides**。
-
-之后更新任何报告，只需推送到 `main`；首页和所有报告一起更新。若只需要手动发布，可不设置该变量，仅手动运行工作流。
+更新报告后推送到 `main` 即可上线，也可在 Actions 中手动运行 **Build and deploy slides**。构建失败时不会发布，线上继续保留上一次成功部署的版本。
 
 ## 当前报告
 
