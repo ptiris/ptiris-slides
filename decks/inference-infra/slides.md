@@ -39,9 +39,9 @@ clicks: 0
 
 ::left::
 
-<div class="outline-map" role="group" aria-label="讲解路线：Infra 的作用、计算、网络、存储。">
+<div class="outline-map" role="group" aria-label="讲解路线：推理中的系统问题、计算、网络、存储。">
   <ol class="outline-rows">
-    <li><span class="outline-topic">Infra 的作用</span><span class="outline-description">模型评测与机器人任务</span></li>
+    <li><span class="outline-topic">推理中的系统问题</span><span class="outline-description">模型评测与机器人任务</span></li>
     <li><span class="outline-topic">计算</span><span class="outline-description">单卡执行与优化</span></li>
     <li><span class="outline-topic">网络</span><span class="outline-description">多卡分工与通信</span></li>
     <li><span class="outline-topic">存储</span><span class="outline-description">KV 管理与内存池</span></li>
@@ -1058,58 +1058,90 @@ clicks: 0
 
 ---
 class: diagram-page
-clicks: 1
+clicks: 2
 ---
 
 # 一张卡，什么时候不够用？
 
 ::left::
 
-<figure class="gemm-figure network-figure" :data-phase="Math.min($clicks, 1)" aria-label="以 Qwen3-8B 的 BF16 权重和 KV Cache 为教学算例。一条8192 token请求的KV为1.125GiB；64条为72GiB，加约15.3GiB权重，超过图中80GiB容量预算。条形按容量成比例，未计工作空间。">
-  <p class="gemm-context">Qwen3-8B · BF16 · 每条请求缓存 8192 token</p>
+<figure class="gemm-figure network-figure" :data-phase="Math.min($clicks, 2)" :aria-label="$clicks === 0 ? 'KV 增长：Qwen3-8B BF16 下，1条8192 token请求的KV为1.125GiB，64条为72GiB，加权重超过80GiB教学容量预算。请求更多或上下文更长都会增加KV。' : $clicks === 1 ? '权重放不下：更大模型的权重条越过单卡显存边界，尚未分配KV。此图为容量关系示意，不对应Qwen3-8B的数值。' : '算力不足：权重和KV均能放下，但在算力成为瓶颈的长Prefill中，计算时间超过目标时限。时间条为定性示意。'">
+  <p class="gemm-context">
+    <span v-if="$clicks === 0">Qwen3-8B · BF16 · 权重约 15.3 GiB</span>
+    <span v-else-if="$clicks === 1">更大的模型 · 权重本身超过单卡显存</span>
+    <span v-else>算力受限的长 Prefill · 权重与 KV 均能放下</span>
+  </p>
   <svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
-    <text class="left-label matrix-name" x="34" y="86">{{ $clicks === 0 ? '1 条请求' : '64 条并发请求' }}</text>
-    <text class="annotation" x="834" y="86">显存预算 80 GiB</text>
-    <rect class="capacity-outline" x="34" y="112" width="800" height="112" />
-    <rect class="tile-input" x="34" y="112" width="153" height="112" />
-    <rect class="output-tile capacity-growth" x="187" y="112" :width="$clicks === 0 ? 11.25 : 720" height="112" />
-    <text class="memory-text" x="110" y="156">权重</text>
-    <text class="memory-text" x="110" y="195">≈ 15.3 GiB</text>
-    <path class="budget-limit" d="M 834 102 V 239" />
-    <path class="trace-line" :d="$clicks === 0 ? 'M 193 228 V 262 H 285' : 'M 547 228 V 244'" />
-    <text class="trace-text" :x="$clicks === 0 ? 421 : 547" y="271">{{ $clicks === 0 ? 'KV Cache：1.125 GiB' : 'KV Cache：72 GiB' }}</text>
-    <text v-if="$clicks === 0" class="annotation" x="570" y="178">还要留出工作空间</text>
-    <g v-else class="step-arrival">
-      <path class="hot-line" d="M 907 168 H 944" />
-      <text class="left-label hot-text" x="959" y="158">已超出</text>
-    <text class="left-label hot-text" x="959" y="193">显存预算</text>
+    <defs><marker id="single-card-limit-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker></defs>
+    <g v-if="$clicks === 0" class="step-arrival">
+      <text class="left-label matrix-name" x="34" y="86">1 条 × 8192 token</text>
+      <text class="annotation" x="834" y="86">显存预算 80 GiB</text>
+      <rect class="capacity-outline" x="34" y="105" width="800" height="66" />
+      <rect class="tile-input" x="34" y="105" width="153" height="66" />
+      <rect class="output-tile" x="187" y="105" width="11.25" height="66" />
+      <text class="memory-text" x="110" y="147">权重</text>
+      <path class="trace-line" d="M 207 138 H 270" />
+      <text class="left-label trace-text" x="285" y="147">KV：1.125 GiB</text>
+      <text class="left-label matrix-name" x="34" y="207">64 条 × 8192 token</text>
+      <rect class="capacity-outline" x="34" y="226" width="800" height="66" />
+      <rect class="tile-input" x="34" y="226" width="153" height="66" />
+      <rect class="output-tile" x="187" y="226" width="720" height="66" />
+      <text class="memory-text" x="110" y="268">权重</text>
+      <text class="trace-text" x="547" y="268">KV：72 GiB</text>
+      <path class="budget-limit" d="M 834 96 V 306" />
+      <path class="hot-line" d="M 915 259 H 950" />
+      <text class="left-label hot-text" x="966" y="268">超出预算</text>
     </g>
-    <path class="rule-line" d="M 34 312 H 1134" />
-    <text class="metric-label" x="226" y="358">显存容量</text>
-    <text x="226" y="402">放得下？</text>
-    <text class="metric-label" x="584" y="358">显存带宽</text>
-    <text x="584" y="402">读得够快？</text>
-    <text class="metric-label" x="942" y="358">计算吞吐</text>
-    <text x="942" y="402">算得够快？</text>
-    <path class="rule-line" d="M 405 340 V 411 M 763 340 V 411" />
+    <g v-else-if="$clicks === 1" class="step-arrival">
+      <text class="annotation" x="834" y="94">单卡显存边界</text>
+      <rect class="capacity-outline" x="34" y="137" width="800" height="112" />
+      <rect class="tile-input" x="34" y="137" width="1040" height="112" />
+      <text class="memory-text" x="430" y="203">模型权重</text>
+      <text class="hot-text limit-emphasis" x="954" y="203">放不下</text>
+      <path class="budget-limit" d="M 834 113 V 272" />
+      <text class="annotation" x="434" y="298">还没有分配 KV Cache</text>
+    </g>
+    <g v-else class="step-arrival">
+      <rect class="device" x="70" y="122" width="230" height="143" rx="3" />
+      <text x="185" y="161">GPU</text>
+      <rect v-for="i in 6" :key="i" class="output-tile" :x="105 + ((i - 1) % 3) * 57" :y="180 + Math.floor((i - 1) / 3) * 31" width="46" height="22" />
+      <text class="annotation" x="185" y="301">计算单元忙碌</text>
+      <path class="trace-line" d="M 308 193 H 410" marker-end="url(#single-card-limit-arrow)" />
+      <rect class="output-tile" x="420" y="147" width="680" height="92" />
+      <rect class="tile-input" x="860" y="147" width="240" height="92" />
+      <text class="trace-text" x="640" y="203">计算</text>
+      <text class="hot-text limit-emphasis" x="980" y="203">未完成</text>
+      <text class="annotation" x="860" y="104">目标时限</text>
+      <path class="budget-limit" d="M 860 118 V 263" />
+      <path class="quiet-line" d="M 420 283 H 1100" marker-end="url(#single-card-limit-arrow)" />
+      <text class="annotation" x="760" y="315">计算耗时</text>
+    </g>
+    <path class="rule-line" d="M 34 342 H 1134" />
+    <text class="limit-choice" :class="{ 'is-current': $clicks === 0 }" x="226" y="401">KV 变大</text>
+    <text class="limit-choice" :class="{ 'is-current': $clicks === 1 }" x="584" y="401">权重放不下</text>
+    <text class="limit-choice" :class="{ 'is-current': $clicks >= 2 }" x="942" y="401">算力不足</text>
   </svg>
   <figcaption class="gemm-takeaway">
-    <span v-if="$clicks === 0">权重放得下，还要为每条请求留出 KV Cache</span>
-    <span v-else>容量或速度不够时，可以让更多 GPU 分担</span>
-    </figcaption>
+    <span v-if="$clicks === 0">请求更多、上下文更长，KV 都会增长</span>
+    <span v-else-if="$clicks === 1">即使只有一条短请求，权重也可能放不下</span>
+    <span v-else>内存放得下，也可能无法满足响应时限</span>
+  </figcaption>
 </figure>
 
 ::footer::
 
 <span>网络 · 多卡分工与通信</span>
-    <span>步骤 {{ Math.min($clicks, 1) + 1 }} / 2</span>
+    <span>步骤 {{ Math.min($clicks, 2) + 1 }} / 3</span>
     <span>{{ $page }} / {{ $nav.total }}</span>
 
 <!--
-从前面的单卡 GEMM 转向多卡。先说明容量、带宽、计算吞吐是不同的限制：计算资源并不是用来“管理内存”的同一个量。图中采用 80 GiB 显存容量预算作教学示意，不是某一型号 GPU 的实测可用显存；硬件标称 GB 与 GiB 不能直接等同。条形按 10 px/GiB 绘制，权重约 15.3 GiB，未计工作空间与其他运行时开销。
+从前面的单卡 GEMM 转向多卡。这页按三个独立场景讲：KV 占用增加、更大模型的权重放不下、算力不足。每次只显示对应图示，下方同步加粗当前场景。它们不是同一请求的三个连续阶段，也不表示 KV 容量不足就一定耗尽了算力。显存带宽仍可能构成另一种性能瓶颈，前面 Roofline 已说明，这页的算力场景特指计算成为瓶颈的情况。
+第一幅图采用 80 GiB 显存容量预算作教学示意，不是某一型号 GPU 的实测可用显存；硬件标称 GB 与 GiB 不能直接等同。条形按 10 px/GiB 绘制，权重约 15.3 GiB，未计工作空间与其他运行时开销。
 Qwen3-8B：36 层、8 个 KV heads、head_dim=128，BF16 每元素 2B。单 token 的全层 KV=2×36×8×128×2=147456B=144KiB；8192 token 请求为 1.125GiB。假设各请求独立、KV 全部保留，不做前缀共享或 KV 量化。
-[click] 64 条请求的 KV=72GiB，权重加 KV 约87.3GiB，已经超过80GiB预算。Qwen3-8B 的权重本身可以放进一张大显存卡，不要把这页说成“8B 模型必须多卡”。增加独立模型副本可以分担并发；同一模型也可分片。量化、减少驻留请求等也是容量不足时可考虑的方案，这里选择多卡展开下一页。
-下方只提示三种单卡上限，并未由本例证明带宽或算力也已耗尽。后续将追踪同一个 MLP 分到两张卡后，哪些数据必须交换。
+64 条请求的 KV=72GiB，权重加 KV 约87.3GiB，已经超过80GiB预算。固定模型与精度时，KV 与各请求实际保留的 token 总数成正比；增加并发或延长已缓存的上下文都会使 KV 增长。不是仅调大最大长度配置就必然立即占满显存。Qwen3-8B 的权重本身可以放进这一容量预算，不要把本例说成“8B 模型必须多卡”。
+[click] 切换到更大模型的定性示意。此时即使没有 KV，权重本身也越过单卡显存边界；不沿用上一图的 Qwen3-8B 数值，长条不对应指定模型的精确容量。给多张卡各放一份完整副本解决不了这一容量问题，可以切分模型，使每张卡只保留部分权重。量化和卸载也是其他可选方案；这里选择多卡展开后面的 MLP 分片。
+[click] 第三个场景里，权重与 KV 均能放入显存，瓶颈在计算。在算力受限的长 Prefill 中，GPU 计算单元忙碌，计算耗时仍超过服务目标。时间条仅表示定性关系，不代表实测数据；GPU 忙碌本身也不能证明 compute-bound，实际应通过算子测量、Roofline 和 profiler 判断。多卡可通过分片分担一次请求的计算，或通过副本并行提高多请求吞吐；通信开销和负载分配决定实际收益，不保证单请求按卡数线性加速。
+多卡可以分担存储或计算，但具体该分请求、分权重还是分计算，需要识别瓶颈。后续将追踪同一个 MLP 分到两张卡后，哪些数据必须交换。
 配置：https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json
 容量分析：https://jax-ml.github.io/scaling-book/transformers/
 推理：https://jax-ml.github.io/scaling-book/inference/

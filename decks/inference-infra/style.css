@@ -493,6 +493,9 @@
 .network-drawing .device { fill: #fff; stroke: #bdc5d0; stroke-width: 1.6px; }
 .network-drawing .capacity-outline { fill: #f3f5f7; stroke: #aeb7c4; stroke-width: 1.6px; }
 .network-drawing .capacity-growth { transition: width 500ms ease; }
+.network-drawing .limit-choice { fill: var(--deck-muted); font-size: 28px; font-weight: 400; }
+.network-drawing .limit-choice.is-current { fill: var(--deck-accent); font-weight: 700; }
+.network-drawing .limit-emphasis { font-weight: 700; }
 .network-drawing .budget-limit { stroke: #697584; stroke-width: 2px; stroke-dasharray: 6 5; }
 .network-drawing .label-paper { fill: #fff; stroke: none; }
 .network-drawing .hot-line { stroke: var(--deck-warm-border); stroke-width: 2.6px; }

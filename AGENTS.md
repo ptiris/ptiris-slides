@@ -1,5 +1,6 @@
 # Repository conventions
 
+- Commit or push only when the user explicitly requests it. Ordinary edits and local validation stay uncommitted; pushing `main` automatically publishes the website.
 - This repository hosts multiple independent Slidev presentations. Put each presentation in `decks/<slug>/`; use lowercase ASCII words separated by hyphens. Keep published slugs stable.
 - Register public-facing title and description in `site.json`. Its deck order is the homepage order. The default base path is `/ptiris-slides/`.
 - Each deck owns its `slides.md`, `style.css`, `public/`, and optional `layouts/`, `components/`, `reference/`, and `AGENTS.md`.
