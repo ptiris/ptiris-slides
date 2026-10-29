@@ -35,16 +35,17 @@ class: outline-page
 clicks: 0
 ---
 
-# 讲解路线
+# Outline
 
 ::left::
 
-<div class="outline-map" role="group" aria-label="讲解路线：推理中的系统问题、计算、网络、存储。">
+<div class="outline-map" role="group" aria-label="讲解路线：推理中的系统问题、计算、网络、存储，以及端侧 VLA 优化。">
   <ol class="outline-rows">
     <li><span class="outline-topic">推理中的系统问题</span><span class="outline-description">模型评测与机器人任务</span></li>
     <li><span class="outline-topic">计算</span><span class="outline-description">单卡执行与优化</span></li>
     <li><span class="outline-topic">网络</span><span class="outline-description">多卡分工与通信</span></li>
     <li><span class="outline-topic">存储</span><span class="outline-description">KV 管理与内存池</span></li>
+    <li><span class="outline-topic">端侧 VLA</span><span class="outline-description">当前延迟、优化目标与实现方向</span></li>
   </ol>
 </div>
 
@@ -53,9 +54,8 @@ clicks: 0
 <span>{{ $page }} / {{ $nav.total }}</span>
 
 <!--
-先通过模型评测和Robot Harness建立动机，再讲Infra的职责以及理解系统的实际用途。技术主体用三个连续问题组织：单卡如何执行、多卡如何协作、KV如何存放。计算会访问显存，通信也会搬运缓存；三个部分按讲解重点区分，不是彼此独立的系统边界。
+先通过模型评测和Robot Harness建立动机，再讲Infra的职责以及理解系统的实际用途。技术主体用三个连续问题组织：单卡如何执行、多卡如何协作、KV如何存放。计算会访问显存，通信也会搬运缓存；三个部分按讲解重点区分，不是彼此独立的系统边界。最后回到端侧 VLA，把算子、访存和调度的分析用于我们希望推进的优化。
 -->
-
 
 ---
 
@@ -204,12 +204,12 @@ class: diagram-page question-led
     <h3>模型</h3>
     <svg class="map-model" viewBox="0 0 126 62" aria-hidden="true"><rect x="1" y="1" width="124" height="60" rx="2" /><path d="M 32 1 V 61 M 63 1 V 61 M 94 1 V 61 M 1 21 H 125 M 1 41 H 125" /></svg>
   </div>
-  <p class="map-caption" style="left: 638px; top: 112px; width: 206px;">数据放置</p>
+  <p class="map-caption" style="left: 638px; top: 112px; width: 206px;">数据放置/传输</p>
   <div class="map-object" style="left: 0; top: 193px; width: 162px;">
     <h3>请求</h3>
     <div class="map-request-stack" aria-hidden="true"><i></i><i></i><i></i></div>
   </div>
-  <p class="map-caption" style="left: 187px; top: 225px; width: 138px;">请求合批</p>
+  <p class="map-caption" style="left: 187px; top: 225px; width: 138px;">请求调度</p>
   <div class="map-object map-accelerator" style="left: 330px; top: 190px; width: 210px;">
     <h3>GPU 0</h3>
     <div class="map-memory"><span class="memory-region">参数</span><span class="memory-region is-state">状态</span></div>
@@ -219,9 +219,9 @@ class: diagram-page question-led
     <div class="map-memory"><span class="memory-region">参数</span><span class="memory-region is-state">状态</span></div>
   </div>
   <p class="map-caption" style="left: 543px; top: 225px; width: 124px;">多卡协作</p>
-  <p class="map-caption" style="left: 883px; top: 225px; width: 128px;">结果交接</p>
+  <p class="map-caption" style="left: 883px; top: 225px; width: 128px;"></p>
   <div class="map-object map-destination" style="left: 1015px; top: 246px; width: 153px;">
-    <h3>下一步</h3>
+    <h3>输出结果</h3>
   </div>
 </figure>
 
@@ -409,8 +409,9 @@ clicks: 0
 
 <!--
 承接Infra用途：要能估算资源和识别瓶颈，先把代码对应到真实硬件。下一页从Qwen的MLP出发，展开计算图、CUDA与GPU；再比较Prefill和Decode，利用Roofline分析计算与搬运的限制，最后讨论输出分块、K步长和双缓冲的取舍。
--->
 
+在这里还要提一下，MegaKernel
+-->
 
 ---
 class: diagram-page
@@ -523,86 +524,76 @@ class: diagram-page
 clicks: 4
 ---
 
-# GEMM：一个输出块怎样算出来
+# GEMM：沿 K 分块，累加一个输出 tile
 
 ::left::
 
-<figure class="gemm-figure tile-walk" :data-phase="Math.min($clicks, 4)" aria-label="Qwen3-8B gate_proj 的一种分块执行示意。输入为 8192 乘 4096，权重为 4096 乘 12288，使用 BF16 输入和 FP32 累加。追踪一个 64 乘 64 输出块，每轮沿 K 读取 32 个元素。按下一步依次展示读取、累加、下一段 K，以及全部 128 轮完成后的写回。">
-  <p class="gemm-context">gate_proj：X [8192, 4096] × W [4096, 12288] = Y [8192, 12288]</p>
-  <svg class="execution-drawing gemm-drawing" viewBox="0 0 1168 510" aria-hidden="true">
-    <defs>
-      <marker id="tile-walk-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker>
-      <marker id="tile-walk-warm" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker>
-      <marker id="tile-walk-blue" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker>
-    </defs>
-    <text class="matrix-name" x="148" y="73">X 的 64 行</text>
-    <rect class="matrix-base" x="28" y="101" width="240" height="66" />
-    <path class="grid-line" d="M 88 101 V 167 M 148 101 V 167 M 208 101 V 167" />
-    <rect class="k-window" x="28" y="101" width="60" height="66" :style="{ transform: `translateX(${$clicks >= 4 ? 180 : $clicks >= 3 ? 60 : 0}px)` }" />
-    <text class="block-label" x="58" y="143">X₀</text>
-    <text class="block-label" x="118" y="143">X₁</text>
-    <text x="178" y="143">…</text>
-    <text class="block-label" x="238" y="143">X₁₂₇</text>
-    <text class="annotation" x="148" y="201">每块 64 × 32</text>
-    <text class="matrix-name" x="449" y="73">W 的 64 列</text>
-    <rect class="matrix-base" x="402" y="94" width="94" height="128" />
-    <path class="grid-line" d="M 402 126 H 496 M 402 158 H 496 M 402 190 H 496" />
-    <rect class="k-window" x="402" y="94" width="94" height="32" :style="{ transform: `translateY(${$clicks >= 4 ? 96 : $clicks >= 3 ? 32 : 0}px)` }" />
-    <text class="block-label" x="449" y="118">W₀</text>
-    <text class="block-label" x="449" y="150">W₁</text>
-    <text x="449" y="182">…</text>
-    <text class="block-label" x="449" y="214">W₁₂₇</text>
-    <text class="annotation" x="581" y="171">32 × 64</text>
-    <text class="matrix-name" x="1070" y="73">输出 Y</text>
-    <rect class="matrix-base" x="1000" y="101" width="140" height="112" />
-    <path class="grid-line" d="M 1070 101 V 213 M 1000 157 H 1140" />
-    <rect class="output-window" :class="{ 'is-complete': $clicks >= 4 }" x="1000" y="101" width="70" height="56" />
-    <text class="annotation" x="1070" y="243">64 × 64 输出块</text>
-    <text x="777" y="101">K 每轮推进 32</text>
-    <text class="trace-text" x="777" y="145">4096 ÷ 32 = 128 轮</text>
-    <text class="annotation" x="777" y="188">BF16 输入 · FP32 累加</text>
-    <path class="walk-read" d="M 84 214 V 356 H 201" marker-end="url(#tile-walk-warm)" />
-    <path class="walk-read" d="M 402 233 H 154 V 356" />
-    <rect class="cache-box" x="208" y="322" width="60" height="70" rx="3" />
-    <text class="annotation" x="238" y="365">L2</text>
-    <path class="walk-read" d="M 269 356 H 313" marker-end="url(#tile-walk-warm)" />
-    <rect class="hardware-boundary" x="300" y="262" width="796" height="172" rx="3" />
-    <text class="left-label matrix-name" x="323" y="291">SM：一个线程块</text>
-    <text class="annotation" x="434" y="323">共享内存</text>
-    <rect class="operand-buffer" x="324" y="336" width="220" height="67" rx="3" />
-    <g class="resident-operands" :class="{ 'is-ready': $clicks >= 1 }">
-      <rect class="tile-input" x="338" y="350" width="84" height="38" />
-      <rect class="tile-input" x="446" y="350" width="84" height="38" />
-      <text class="memory-text" x="380" y="377">X 块</text>
-      <text class="memory-text" x="488" y="377">W 块</text>
-    </g>
-    <g v-if="$clicks === 1 || $clicks === 3" :key="`x-${$clicks}`" class="transfer-packet" :style="{ '--packet-dx': `${$clicks === 3 ? -250 : -310}px`, '--packet-dy': '-249px', '--packet-via-x': '-142px', '--packet-via-y': '-12px' }">
-      <rect class="tile-input" x="338" y="350" width="84" height="38" />
-    </g>
-    <g v-if="$clicks === 1 || $clicks === 3" :key="`w-${$clicks}`" class="transfer-packet" :style="{ '--packet-dx': '-44px', '--packet-dy': `${$clicks === 3 ? -224 : -256}px`, '--packet-via-x': '-250px', '--packet-via-y': '-12px' }">
-      <rect class="tile-input" x="446" y="350" width="84" height="38" />
-    </g>
-    <path class="walk-compute" d="M 553 369 H 602" marker-end="url(#tile-walk-blue)" />
-    <rect class="compute-stage" :class="{ 'is-computing': $clicks >= 2 }" x="610" y="336" width="184" height="67" rx="3" />
-    <text x="702" y="361">Tensor Cores</text>
-    <text class="annotation" x="702" y="394">乘加</text>
-    <path class="walk-compute" d="M 803 369 H 853" marker-end="url(#tile-walk-blue)" />
-    <text class="annotation" x="962" y="323">寄存器 · FP32</text>
-    <rect class="accumulator-stage" :class="{ 'has-sum': $clicks >= 2 }" x="862" y="336" width="200" height="67" rx="3" />
-    <text v-if="$clicks &lt; 2" x="962" y="379">C = 0</text>
-    <text v-else-if="$clicks === 2" x="962" y="379">C += X₀W₀</text>
-    <text v-else-if="$clicks === 3" x="962" y="379">C += X₁W₁</text>
-    <text v-else x="962" y="379">128 轮累加完成</text>
-    <path class="walk-store" d="M 1070 369 H 1156 V 255 H 944 V 129 H 992" marker-end="url(#tile-walk-blue)" />
-    <text class="annotation" x="1127" y="314">写回</text>
-  </svg>
-  <figcaption class="gemm-takeaway">
-    <span v-if="$clicks === 0">一个线程块负责一个输出块，沿 K 分段计算</span>
-    <span v-else-if="$clicks === 1">先读入 X、W 的小块，在片上反复使用</span>
-    <span v-else-if="$clicks === 2">计算本轮乘加，部分结果保留在寄存器中</span>
-    <span v-else-if="$clicks === 3">推进到下一段 K，继续累加到同一个输出块</span>
-    <span v-else>全部 128 轮完成后，再写回这个输出块</span>
-  </figcaption>
+<figure class="gemm-figure tiled-memory" :data-phase="Math.min($clicks, 4)" aria-label="Blackwell SM100 GEMM 分块示意：选定一个 128×256 输出 tile，每轮把 128×64 的 X 与 64×256 的 W 搬入 SMEM，Tensor Cores 在 TMEM 累加 FP32 部分和。X 沿 K 向右移动，W 沿 K 向下移动，完成 64 轮后由寄存器处理输出并写回 HBM。">
+<p class="gemm-context">Blackwell SM100 · BF16 GEMM · 完整矩阵位于 Global Memory / HBM</p>
+<svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs><marker id="gemm-memory-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker></defs>
+<rect class="hardware-boundary" x="15" y="303" width="1125" height="140" rx="3" />
+<text class="matrix-name" x="160" y="72">输入 X</text>
+<text class="annotation" x="160" y="103">8192 × 4096 · 64 MiB</text>
+<text class="matrix-name" x="550" y="72">权重 W</text>
+<text class="annotation" x="550" y="103">4096 × 12288 · 96 MiB</text>
+<text class="matrix-name" x="970" y="72">输出 Y</text>
+<text class="annotation" x="970" y="103">8192 × 12288 · 192 MiB</text>
+<rect class="matrix-base" x="40" y="121" width="240" height="112" />
+<rect class="matrix-base" x="430" y="121" width="240" height="112" />
+<rect class="matrix-base" x="850" y="121" width="240" height="112" />
+<rect class="tile-strip" x="40" y="149" width="240" height="28" />
+<rect class="tile-strip" x="550" y="121" width="60" height="112" />
+<path class="grid-line" d="M 100 121 V 233 M 160 121 V 233 M 220 121 V 233 M 40 149 H 280 M 40 177 H 280 M 40 205 H 280" />
+<path class="grid-line" d="M 490 121 V 233 M 550 121 V 233 M 610 121 V 233 M 430 149 H 670 M 430 177 H 670 M 430 205 H 670" />
+<path class="grid-line" d="M 910 121 V 233 M 970 121 V 233 M 1030 121 V 233 M 850 149 H 1090 M 850 177 H 1090 M 850 205 H 1090" />
+<text class="annotation" x="190" y="171">…</text>
+<text class="annotation" x="580" y="199">⋮</text>
+<g v-if="$clicks >= 1" class="tile-motion" :style="{ transform: 'translateX(' + ($clicks >= 4 ? 180 : $clicks === 3 ? 60 : 0) + 'px)' }">
+<rect class="k-window" x="40" y="149" width="60" height="28" />
+<text class="tile-symbol" x="70" y="171">{{ $clicks >= 4 ? 'X₆₃' : $clicks === 3 ? 'X₁' : 'X₀' }}</text>
+</g>
+<g v-if="$clicks >= 1" class="tile-motion" :style="{ transform: 'translateY(' + ($clicks >= 4 ? 84 : $clicks === 3 ? 28 : 0) + 'px)' }">
+<rect class="k-window" x="550" y="121" width="60" height="28" />
+<text class="tile-symbol" x="580" y="143">{{ $clicks >= 4 ? 'W₆₃' : $clicks === 3 ? 'W₁' : 'W₀' }}</text>
+</g>
+<rect class="output-window" :class="{ 'is-complete': $clicks >= 4 }" x="970" y="149" width="60" height="28" />
+<text class="tile-symbol trace-text" x="1000" y="171">Yₜ</text>
+<text class="math-symbol" x="355" y="184">×</text>
+<text class="math-symbol" x="760" y="184">=</text>
+<text :class="$clicks >= 4 ? 'annotation trace-text' : 'annotation'" x="970" y="272">{{ $clicks >= 4 ? '写回这个输出 tile' : '同一个 128 × 256 输出 tile' }}</text>
+<text class="left-label annotation" x="30" y="291">SM</text>
+<text class="annotation" x="430" y="275">经 L2 · 分块搬运</text>
+<path class="tile-read" :d="'M ' + ($clicks >= 4 ? 250 : $clicks === 3 ? 130 : 70) + ' 241 V 268 H 105 V 311'" marker-end="url(#gemm-memory-arrow)" />
+<path class="tile-read" d="M 580 241 V 288 H 270 V 311" marker-end="url(#gemm-memory-arrow)" />
+<rect class="operand-buffer" x="35" y="319" width="315" height="118" rx="3" />
+<text x="192" y="347">Shared Memory</text>
+<rect :class="$clicks >= 1 ? 'tile-input' : 'matrix-base'" x="50" y="359" width="135" height="66" rx="2" />
+<rect :class="$clicks >= 1 ? 'tile-input' : 'matrix-base'" x="200" y="359" width="135" height="66" rx="2" />
+<text x="117" y="385">{{ $clicks === 0 ? 'X tile' : $clicks >= 4 ? 'X₆₃' : $clicks === 3 ? 'X₁' : 'X₀' }}</text>
+<text class="annotation" x="117" y="415">128 × 64</text>
+<text x="267" y="385">{{ $clicks === 0 ? 'W tile' : $clicks >= 4 ? 'W₆₃' : $clicks === 3 ? 'W₁' : 'W₀' }}</text>
+<text class="annotation" x="267" y="415">64 × 256</text>
+<rect class="compute-stage" :class="{ 'is-computing': $clicks === 2 || $clicks === 3 }" x="392" y="319" width="188" height="118" rx="3" />
+<text x="486" y="347">Tensor Cores</text>
+<text x="486" y="383">Xₖ × Wₖ</text>
+<text class="annotation" x="486" y="415">矩阵乘加</text>
+<rect class="accumulator-stage" :class="{ 'has-sum': $clicks >= 2 }" x="625" y="319" width="220" height="118" rx="3" />
+<text x="735" y="347">Tensor Memory</text>
+<text class="trace-text" x="735" y="383">{{ $clicks &lt; 2 ? 'C = 0' : $clicks === 2 ? 'C += X₀W₀' : $clicks === 3 ? 'C += X₁W₁' : 'Σₖ XₖWₖ' }}</text>
+<text class="annotation" x="735" y="415">FP32 · 128 × 256</text>
+<rect class="register-stage" :class="{ 'has-sum': $clicks >= 4 }" x="890" y="319" width="235" height="118" rx="3" />
+<text x="1007" y="347">寄存器</text>
+<text class="annotation" x="1007" y="383">地址 · 循环状态</text>
+<text class="annotation" x="1007" y="415">输出处理 · 转型</text>
+<path class="tile-compute" d="M 358 378 H 384" marker-end="url(#gemm-memory-arrow)" />
+<path class="tile-compute" d="M 588 378 H 617" marker-start="url(#gemm-memory-arrow)" marker-end="url(#gemm-memory-arrow)" />
+<g v-if="$clicks >= 4" class="step-arrival">
+<path class="trace-line" d="M 853 378 H 882" marker-end="url(#gemm-memory-arrow)" />
+<path class="trace-line" d="M 1133 378 H 1159 V 163 H 1038" marker-end="url(#gemm-memory-arrow)" />
+</g>
+</svg>
+<figcaption class="gemm-takeaway">{{ ['一个 CTA 计算一个输出 tile；沿 K 分段累加', 'X、W 只搬当前 tile：共享内存中复用，共 48 KiB', 'Tensor Cores 读 X、W，FP32 部分和在 TMEM 中累加', 'X 向右、W 向下：推进 K，继续累加同一个 C', '4096 ÷ 64 = 64 轮；处理输出后，写回 Y 的这个 tile'][Math.min($clicks, 4)] }}</figcaption>
 </figure>
 
 ::footer::
@@ -610,16 +601,18 @@ clicks: 4
 <span>计算 · 单卡执行与优化</span><span>步骤 {{ Math.min($clicks, 4) + 1 }} / 5</span><span>{{ $page }} / {{ $nav.total }}</span>
 
 <!--
-承接 Behind PyTorch，固定 Qwen3-8B gate_proj 的一个 prefill GEMM：m=8192、K=4096、N=12288。模型维度与 FLOPs 口径沿用 infra-book 第二章；下方补充 NVIDIA 传统分块 Tensor Core GEMM 的教学执行示意，不声称这是书中第二章的 kernel 实现，也不声称捕获了某一版本 PyTorch、cuBLAS 或 vLLM 的实际执行轨迹。
-选择输出 64×64、K 步长 32、BF16 输入、FP32 累加作为教学设定。这个输出块固定需要 X 的 64 行和 W 的 64 列；K=4096 分为 128 段，不能把图上省略的中间段当成只有四轮。X 与 W 都只画第一、第二、最后一段及省略号，输出 Y 只画几个代表性块，图形不按全矩阵尺寸比例缩放。
-[click] 线程协作读取当前 X、W 块，经 L2 缓存路径进入共享内存。L2 命中时不必重新访问显存芯片，不能把全局加载请求直接等同于 DRAM 流量。本页采用串行阶段示意，不表达同步机制、异步复制或流水重叠。
-[click] Warp 以片段组织数据，发出矩阵乘加指令。图省略输入操作数寄存器、warp 细分与指令级布局，Tensor Cores 与 FP32 累加器分开画是为了说明执行与结果驻留；累加器并不是 Tensor Core 外的一条额外全局存储访问。本图按传统 register-accumulator 路径讲解，不泛化到采用 Tensor Memory 等不同累加器存储的所有 GPU。
-[click] 将 K 偏移从 0 推进到 32，复用同一组输入缓冲，继续累加同一个输出块。动画只示范第二轮，其余轮用省略号跳过。
-[click] 累加全部 4096 个 K 元素后，在 epilogue 中按需要转换为 BF16 并写回输出。选择的 64×64 输出块含 4096 个元素；一轮输入共 8 KiB，计算 262144 FLOPs，FP32 累加器逻辑数据为 16 KiB，下一页比较这些量。这个单块历经 128 轮，总矩阵工作量为 33554432 FLOPs。单 kernel、无 split-K 的示意让一个线程块完成一个输出块；真实实现也可能采用 split-K 等策略，需另计归约和额外开销。
-来源：https://bojieli.github.io/ai-infra-book/manuscripts/02-模型架构.html
-来源：https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json
-硬件执行参考：https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html
-数据路径参考：https://developer.nvidia.com/blog/cutlass-linear-algebra-cuda/
+2026-10-29 重画为矩阵 tile 与硬件路径的对应，明确采用 Blackwell SM100 的 tcgen05、单 CTA、A/B 均来自 SMEM 的实例。它是 NVIDIA CUTLASS 支持的稠密 GEMM 路径，不表示每个 PyTorch GEMM 都选此实现，也不把此路径泛化到 RTX 50 系列等所有 Blackwell 产品。Global Memory 是地址空间，HBM 是本例的物理承载；SMEM 和 TMEM 是不同用途的片上存储，不是上下级缓存。TMA 是搬运机制，不是 Tensor Memory。
+Qwen3-8B gate_proj：X[8192,4096]、W[4096,12288]、Y[8192,12288]，BF16 分别为 64、96、192 MiB。W 是数学布局，PyTorch Linear 通常存储其转置。网格省略实际的大多数 tile；X 高亮的行块和 W 高亮的列块决定同一个输出块。矩阵网格、地址和路径都为逻辑示意，不表示物理布局、所有 tile 数或 kernel 的实测调度。
+BM=128、BN=256、BK=64，来自 NVIDIA 01_mma_sm100.cu 与 tcgen05 编程指南的具体分块示例。每个 K tile 内再由 K=16 的 MMA 指令完成计算，64 个 K tile 不是 64 条 MMA 指令。此配置用于讲清流程，不承诺在本 Qwen 形状下性能最优。后面第 15–16 页使用另一个明确标注的 64×64 教学算例来比较资源取舍。
+[click] 当前输入块 Xk=128×64、Wk=64×256；BF16 逻辑大小分别 16、32 KiB，共 48 KiB。SMEM 只存一个或几个流水阶段的 tile。两个 operand 都在 SMEM 暂存是高性能稠密 GEMM 的常见选择，同一 X 元素可服务该 tile 的多个输出列，同一 W 元素可服务多个输出行。多级缓冲、padding、swizzle 和同步元数据会增加占用；不能把 48 KiB 当作完整 kernel 的 SMEM 分配。跨 CTA 复用可能来自 L2 或 multicast，不是所有 CTA 共用一块 SMEM。L2 命中时无需再访问 HBM。
+[click] tcgen05 MMA 的 B 来自 SMEM，A 可以来自 SMEM 或 TMEM，本图选择 SS 模式；累加 C 在 TMEM 中读改写。C 初始为零是数学语义，实际首条指令可禁用旧累加器参与，并非必须先逐元素写零。与 Ampere 的 mma.sync 不同，此路径不需要把两个输入 tile 先完整展开到每线程寄存器再喂给 Tensor Cores。
+[click] X 沿 K 向右移动，W 沿 K 向下移动，输出 tile 的位置保持不变。4096/64=64 轮；动画先展示第 0 和第 1 段，最后跨过省略号到第 63 段。SMEM buffer 可以复用，覆盖前须确认对应异步读已完成；生产实现常以双缓冲或多级流水把下一段加载与当前计算重叠。图按逻辑依赖分步讲解，不表示实际执行必须串行。
+[click] 所有 K 段完成并同步后，把 TMEM 中的结果片段读入寄存器，完成 epilogue，再写回 Y tile。本页选择直接寄存器写回的简化路径；高性能实现也可经过 SMEM 重排并用 TMA store。寄存器不仅转 BF16：整个 kernel 还用它保存地址、索引、循环/流水状态等，输出阶段可做缩放、bias、激活等逐元素计算及转换。Qwen3 gate_proj 无 bias；本例不声称 bias 或 SiLU 已被融合到该 kernel，若融合 MLP 则可以扩展 epilogue。TMEM 累加器的逻辑数据为 128×256×4=128 KiB，实际分配仍服从布局和硬件粒度，不等同于寄存器占用。
+常见性边界：大矩阵 Tensor Core GEMM 通常会分块暂存 X/W；小 m decode、GEMV 或特定融合算子可能走不同的访存和指令路径，并非所有权重和输入都必须经过 SMEM。Ampere/A100 的 mma.sync 通常用寄存器保存输入片段与 FP32 累加器；Hopper WGMMA 的累加器仍在寄存器，A 可以来自寄存器或 SMEM，B 来自 SMEM。不要把这些架构的寄存器作用与本页的 TMEM 混为一谈。
+来源：https://docs.nvidia.com/cutlass/latest/media/docs/pythonDSL/guides/mma/tcgen05_programming.html
+来源：https://github.com/NVIDIA/cutlass/blob/main/examples/cute/tutorial/blackwell/01_mma_sm100.cu
+来源：https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html
+模型配置：https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json
 -->
 
 ---
@@ -711,7 +704,7 @@ clicks: 2
 ::left::
 
 <figure class="gemm-figure shape-comparison" :data-phase="Math.min($clicks, 2)" aria-label="Qwen3-8B 同一个 gate_proj 的形状变化。单请求 decode 的 m 为 1，64 条请求各推进一个 token 时 m 为 64，单请求 8192 token prefill 时 m 为 8192。权重始终为 4096 乘 12288，BF16 占 96 MiB；输入输出和矩阵计算量随 m 变化。矩阵图形示意行数变化，不按三种行数的实际比例缩放。">
-  <p class="gemm-context">同一个 gate_proj，BF16 输入与输出</p>
+  <p class="gemm-context">gate_proj · BF16 · W、X 各读一次，Y 写一次</p>
   <div class="scenario-rail" aria-label="当前演示场景" aria-live="polite">
     <span v-if="$clicks === 0" class="is-current">单请求 decode</span>
     <span v-else-if="$clicks === 1" class="is-current">64 请求 decode</span>
@@ -719,8 +712,12 @@ clicks: 2
   </div>
   <svg class="execution-drawing gemm-drawing" viewBox="0 0 1168 510" aria-hidden="true">
     <defs>
-      <pattern id="shape-weight-grid" width="30" height="26" patternUnits="userSpaceOnUse"><path class="grid-line" d="M 30 0 H 0 V 26" /></pattern>
-      <pattern id="shape-token-grid" width="36" height="20" patternUnits="userSpaceOnUse"><path class="grid-line" d="M 36 0 H 0 V 20" /></pattern>
+      <pattern id="shape-weight-grid" width="30" height="26" patternUnits="userSpaceOnUse">
+<path class="grid-line" d="M 30 0 H 0 V 26" />
+</pattern>
+      <pattern id="shape-token-grid" width="36" height="20" patternUnits="userSpaceOnUse">
+<path class="grid-line" d="M 36 0 H 0 V 20" />
+</pattern>
     </defs>
     <text class="matrix-name" x="144" y="128">输入 X</text>
     <text class="matrix-name" x="571" y="128">权重 W</text>
@@ -739,17 +736,17 @@ clicks: 2
     <text class="annotation" x="571" y="312">4096 × 12288</text>
     <text class="annotation" x="1000" y="312">{{ $clicks === 0 ? '1' : $clicks === 1 ? '64' : '8192' }} × 12288</text>
     <path class="rule-line" d="M 0 337 H 1168" />
-    <text class="metric-label" x="185" y="369">单个 GEMM 的计算量</text>
-    <text class="metric-value trace-text" x="185" y="409">{{ $clicks === 0 ? '0.101 GFLOPs' : $clicks === 1 ? '6.44 GFLOPs' : '824.63 GFLOPs' }}</text>
-    <text class="metric-label" x="584" y="369">输入 X ＋ 输出 Y</text>
-    <text class="metric-value" x="584" y="409">{{ $clicks === 0 ? '32 KiB' : $clicks === 1 ? '2 MiB' : '256 MiB' }}</text>
-    <text class="metric-label" x="982" y="369">单层 MLP 的权重</text>
-    <text class="metric-value" x="982" y="409">3 × 96 = 288 MiB</text>
+    <text class="metric-label" x="268" y="369">计算量 · 2mKN</text>
+    <text class="metric-value trace-text" font-weight="700" x="268" y="405">{{ $clicks === 0 ? '0.101 GFLOPs' : $clicks === 1 ? '6.44 GFLOPs' : '824.63 GFLOPs' }}</text>
+    <text class="annotation" x="268" y="437">{{ $clicks === 0 ? '基准 · 1 倍' : $clicks === 1 ? '增至 64 倍' : '增至 8192 倍' }}</text>
+    <text class="metric-label" x="858" y="369">理想访存量 · W ＋ X ＋ Y</text>
+    <text class="metric-value memory-text" font-weight="700" x="858" y="405">{{ $clicks === 0 ? '96.03 MiB' : $clicks === 1 ? '98 MiB' : '352 MiB' }}</text>
+    <text class="annotation" x="858" y="437">{{ $clicks === 0 ? '基准 · 1 倍' : $clicks === 1 ? '仅增至 1.02 倍' : '仅增至 3.67 倍' }}</text>
   </svg>
   <figcaption class="gemm-takeaway">
     <span v-if="$clicks === 0">全部权重参与计算，只得到一行输出</span>
-    <span v-else-if="$clicks === 1">更多 token 共用权重，输入与输出也随之增大</span>
-    <span v-else>矩阵形状变了，分块与资源预算也要重新选择</span>
+    <span v-else-if="$clicks === 1">64 行复用同一份 W：计算增至 64 倍，理想访存仅增至 1.02 倍</span>
+    <span v-else>8192 行共用权重，计算增长远快于理想访存量</span>
   </figcaption>
 </figure>
 
@@ -758,15 +755,13 @@ clicks: 2
 <span>计算 · 单卡执行与优化</span><span>步骤 {{ Math.min($clicks, 2) + 1 }} / 3</span><span>{{ $page }} / {{ $nav.total }}</span>
 
 <!--
-回到 infra-book 第二章的模型侧计算。固定 gate_proj K=4096、N=12288、BF16 输入/权重/输出。m 是当前参与投影的 token 总数，等长请求 m=BP；已有上下文不算成当前 MLP 的输入行。输入矩阵图只表达一行、较少行、很多行，不按实际 1:64:8192 比例缩放，精确行数看维度标签。
-每个线性投影权重 4096×12288=50331648 个参数，BF16 为 100663296B=96MiB。三个 MLP 投影（down 的维度次序相反）合计 150994944 个参数、288MiB。图中 288MiB 是一个 MLP 层，不是 36 层全模型。
-初始：m=1，F=2mKN=100663296 FLOPs，约 0.101GFLOPs；X=8KiB、Y=24KiB，合计 32KiB。数学上退化为向量与矩阵的乘法。若直接套用上一页的 128 行输出 tile，最多只包含一行有效输出，不能因前一页的 F/R 更高就断言大 tile 适合此形状。实际实现可能用其他 GEMV/GEMM 路径。
-[click] 64 条独立请求各推进一个 token，m=64。F=6442450944 FLOPs，约 6.44GFLOPs；X=0.5MiB、Y=1.5MiB，合计 2MiB。权重集合保持 96MiB，多行提供权重复用机会，但实际 DRAM 流量仍取决于缓存、分块和实现。图不把逻辑权重容量当作每次必然只从显存读一次。此比较只看 MLP，不计算额外请求的 KV 状态和排队延迟，也不宣称 batch 增大会降低单请求时延。
-[click] 单请求一次 prefill 8192 个 token，m=8192。F=824633720832 FLOPs，约 824.63GFLOPs；X=64MiB、Y=192MiB，合计 256MiB。三个 MLP GEMM 的矩阵工作约为 2473.90GFLOPs；还需另计 SiLU 与逐元素乘法。本页三个场景统一使用 GFLOPs，便于直接比较。这里列出的输入加输出只是本次 GEMM 两个张量的逻辑字节，不是完整 MLP 临时内存峰值，也不包含额外工作区或框架预留。
-本页不提供估算时长或加速倍数，重点是同一权重矩阵面对不同 m 时的形状、算量、激活大小和分块适配。上一页的 64×64 与 128×128 都是用于解释的候选输出 tile，不是对某块具体 GPU 的最优配置建议。
-来源：https://bojieli.github.io/ai-infra-book/manuscripts/02-模型架构.html
+固定 Qwen3-8B gate_proj：K=4096、N=12288，X/W/Y 均 BF16。m 是当前参与投影的 token 总数：1 个请求 decode 为 1；64 请求各推进一个 token 为 64；8192-token prefill 为 8192。图中高度只是形状示意，不按 1:64:8192 缩放。所有计算量统一 GFLOPs（10^9 FLOPs），访存统一 MiB（2^20 B），乘加按 2 FLOPs。
+F=2mKN；R=2(mK+KN+mN) B。本页 R 是冷数据、每个输入元素恰好读取一次且输出写一次的理想必要流量，不读旧 Y、不计其他算子、通信或工作空间。W 恒为 96 MiB；X+Y 分别为 0.03125、2、256 MiB，所以 R 为 96.03125、98、352 MiB。实际 HBM 访问受分块、L2 命中、重复加载及写回影响；缓存已热时也可能低于这个冷数据估算，不能把 R 当作测量值。
+初始：F=100663296 FLOPs = 0.100663296 GFLOPs，R=100696064 B。以此为倍数基准。
+[click] F=6.442450944 GFLOPs，是 64 倍；R=98 MiB，是 1.0205 倍。多行共享同一份权重，前提是实现兑现了复用。
+[click] F=824.633720832 GFLOPs，是 8192 倍；R=352 MiB，是 3.6655 倍。运算强度 F/R 从约 1 升至 62.69、2234.18 FLOP/B，接下来的 Roofline 用同一个口径。
+来源：https://jax-ml.github.io/scaling-book/inference/
 来源：https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json
-分块形状适配参考：https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html
 -->
 
 ---
@@ -883,7 +878,7 @@ clicks: 2
   <figcaption class="gemm-takeaway">
     <span v-if="$clicks === 0">一行输入难以复用权重，带宽上限远低于算力上限</span>
     <span v-else-if="$clicks === 1">更多输入共享权重，运算强度提高，但尚未跨过拐点</span>
-    <span v-else>该假设下已跨过拐点；实际实现还要兑现数据复用</span>
+    <span v-else>超过拐点之后，由计算能力所限制</span>
   </figcaption>
 </figure>
 
@@ -908,7 +903,7 @@ class: diagram-page
 clicks: 2
 ---
 
-# 输出块变大，要付出多少片上空间？
+# 输出块大小的取舍？
 
 ::left::
 
@@ -916,8 +911,12 @@ clicks: 2
   <p class="gemm-context">输出块 Bₘ × Bₙ；BF16 输入，FP32 累加，K 步长 32，单缓冲</p>
   <svg class="execution-drawing gemm-drawing" viewBox="0 0 1168 510" aria-hidden="true">
     <defs>
-      <pattern id="small-output-grid" x="258" y="190" width="16" height="16" patternUnits="userSpaceOnUse"><path class="grid-line" d="M 16 0 H 0 V 16" /></pattern>
-      <pattern id="large-output-grid" x="814" y="126" width="16" height="16" patternUnits="userSpaceOnUse"><path class="grid-line" d="M 16 0 H 0 V 16" /></pattern>
+      <pattern id="small-output-grid" x="258" y="190" width="16" height="16" patternUnits="userSpaceOnUse">
+<path class="grid-line" d="M 16 0 H 0 V 16" />
+</pattern>
+      <pattern id="large-output-grid" x="814" y="126" width="16" height="16" patternUnits="userSpaceOnUse">
+<path class="grid-line" d="M 16 0 H 0 V 16" />
+</pattern>
     </defs>
     <text class="matrix-name trace-text" x="290" y="66">输出块 64 × 64</text>
     <rect class="output-tile" x="258" y="190" width="64" height="64" />
@@ -974,7 +973,7 @@ clicks: 2
 这页比较的是教学 tile 配置，不是 cuBLAS 调参结果或实测速度。输入 BF16 每元素 2B、累加 FP32 每元素 4B，固定 BK=32，单级输入缓冲，没有 padding、对齐、额外寄存器与同步元数据。输出 tile 的边长在图上精确扩大两倍，面积扩大四倍；每一行条形只在同一指标内比较，跨行不共用数值尺度。
 小块 BM=BN=64：输入逻辑字节 2(BM×BK+BK×BN)=8192B=8KiB，等于该示意的单级输入缓冲容量。每轮 FLOPs=2×BM×BN×BK=262144，因此输入读取口径的 F/R=32FLOP/B。输出块 FP32 累加器合计 4×BM×BN=16384B=16KiB。
 [click] 大块 BM=BN=128：输入 16384B=16KiB；每轮 FLOPs=1048576，是小块的四倍；F/R=64FLOP/B。图中 X 块和 W 块各有一条边翻倍，所以输入块面积合计翻倍，输出面积则翻四倍。左右使用相同的空间尺度和排列方向，输入块位置不表示加载顺序。
-[click] FP32 累加器合计 65536B=64KiB，是原来的四倍。这些值是跨线程合计的逻辑累加数据，不是每个线程用 64KiB，也不是共享内存用量。传统寄存器累加实现需要把它们分配到线程寄存器；实际寄存器分配、线程数和硬件限额共同决定占用。输入缓冲增加与累加器增加都会增加片上资源压力，可能减少同时驻留的块，不能由这些字节数直接得出速度或精确 occupancy。
+[click] FP32 累加器合计 65536B=64KiB，是原来的四倍。这些值是跨线程合计的逻辑累加数据，不是每个线程用 64KiB，也不是共享内存用量。传统寄存器累加实现需要把它们分配到线程寄存器；Blackwell tcgen05 使用 TMEM，其分配粒度与占用约束需另算；实际寄存器分配、线程数和硬件限额共同决定占用。输入缓冲增加与累加器增加都会增加片上资源压力，可能减少同时驻留的块，不能由这些字节数直接得出速度或精确 occupancy。
 承接 Roofline：这里用每轮输入块的加载量解释局部复用，与前页完整 GEMM 的 HBM 接口口径不同。
 本页的 F/R 只统计每轮输入块的逻辑加载，忽略输出写回、缓存命中和重复 DRAM 传输，不能拿它直接当实测的 DRAM 运算强度。若换双缓冲，输入缓冲容量还需翻倍；没有在本页展开。m 或 n 很小时，大 tile 还会出现边界无效区域，因此不能把较大的 tile 直接判定为总是更快，输入行数已经在前面比较：m=1 或 m=64 时，128 行 tile 无法填满；m=8192 时两种输出块都能填满。下一页保持输出块不变，单独改变 K 步长与缓冲级数。
 模型参数依据：https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json
@@ -1043,6 +1042,68 @@ BK=32、1个输入buffer：每轮逻辑输入2(64×32+32×64)=8192B=8KiB，每�
 来源：https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html#pipelining
 -->
 
+
+---
+class: diagram-page
+clicks: 0
+---
+
+# Mega Kernel：把跨算子的调度搬到设备内
+
+::left::
+
+<figure class="gemm-figure" aria-label="Mega Kernel：把跨算子的调度搬到设备内">
+  <p class="gemm-context">从优化一个 GEMM，走向优化一段计算过程</p>
+  <svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs>
+<marker id="mega-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible">
+<path class="arrowhead" d="M 2 2 L 10 6 L 2 10" />
+</marker>
+</defs>
+<text class="left-label matrix-name" x="30" y="96" >逐算子启动</text>
+<text class="left-label matrix-name" x="30" y="265" >Mega Kernel</text>
+<rect class="tile-input" x="300" y="112" width="200" height="75" rx="3" />
+<text class="" x="400" y="159" >GEMM</text>
+<text class="annotation" x="400" y="83" >CPU 启动</text>
+<path class="" d="M 400 88 V 104" marker-end="url(#mega-arrow)" />
+<path class="" d="M 508 150 H 557" marker-end="url(#mega-arrow)" />
+<rect class="tile-input" x="565" y="112" width="200" height="75" rx="3" />
+<text class="" x="665" y="159" >激活</text>
+<text class="annotation" x="665" y="83" >CPU 启动</text>
+<path class="" d="M 665 88 V 104" marker-end="url(#mega-arrow)" />
+<path class="" d="M 773 150 H 822" marker-end="url(#mega-arrow)" />
+<rect class="tile-input" x="830" y="112" width="200" height="75" rx="3" />
+<text class="" x="930" y="159" >GEMM</text>
+<text class="annotation" x="930" y="83" >CPU 启动</text>
+<path class="" d="M 930 88 V 104" marker-end="url(#mega-arrow)" />
+<text class="annotation" x="665" y="221" >每个 kernel 各自调度与交接</text>
+<rect class="device" x="260" y="276" width="832" height="125" rx="3" />
+<text class="left-label annotation" x="292" y="310" >设备内常驻执行</text>
+<rect class="output-tile" x="300" y="328" width="200" height="50" rx="3" />
+<text class="" x="400" y="361" >GEMM 任务</text>
+<path class="trace-line" d="M 508 353 H 557" marker-end="url(#mega-arrow)" />
+<rect class="output-tile" x="565" y="328" width="200" height="50" rx="3" />
+<text class="" x="665" y="361" >激活任务</text>
+<path class="trace-line" d="M 773 353 H 822" marker-end="url(#mega-arrow)" />
+<rect class="output-tile" x="830" y="328" width="200" height="50" rx="3" />
+<text class="" x="930" y="361" >GEMM 任务</text>
+<path class="trace-line" d="M 120 298 V 354 H 252" marker-end="url(#mega-arrow)" />
+<text class="annotation" x="584" y="434" >少启动、细粒度交接；调度与片上资源管理更复杂</text>
+  </svg>
+  <figcaption class="gemm-takeaway">减少启动与同步开销，也要承担设备内调度的成本</figcaption>
+</figure>
+
+::footer::
+
+<span>计算 · 单卡执行与优化</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+Mega Kernel 是把多个算子的工作纳入一个长驻 kernel/设备程序的一类执行组织方式。以 MPK 为例：编译器生成 SM 粒度任务图，设备端运行时根据依赖调度任务，允许跨算子流水及计算通信重叠。本图以 GEMM→激活→GEMM 简化展示，没有画完整 Qwen 门控 MLP（还包含另一分支与逐元素乘法），不表示所有算子必须串行。
+上方按逐算子启动展示通常执行方式，时间间隙是示意。CUDA Graph 也能降低主机提交开销，但图重放仍可以包含多个 kernel，不等于 Mega Kernel。下方将任务纳入常驻执行，复用数据的机会增加；跨任务数据仍可能落到全局内存，不保证所有中间值留在片上。
+取舍是设备内依赖同步、调度开销、资源划分与形状适配；单算子已经高度优化或长时间占满设备时，融合不保证提速。不用论文最高加速比替代当前模型/端侧的实测结果。
+来源：https://arxiv.org/abs/2512.22219v2
+代码：https://github.com/mirage-project/mirage
+-->
 
 ---
 class: chapter-page
@@ -1232,60 +1293,505 @@ clicks: 1
 
 ---
 class: diagram-page
-clicks: 4
+clicks: 0
 ---
 
-# 多张卡，可以怎样分工？
+# DP：完整副本，分别处理请求
 
 ::left::
 
-<figure class="gemm-figure network-figure" :data-phase="Math.min($clicks, 4)" aria-label="依次介绍DP分请求、TP分矩阵、PP分层、CP分上下文、EP分专家。每次只出现一种图，并配一个主要问题。EP明确采用MoE模型，其他示意沿用稠密模型。">
-  <p class="gemm-context">{{ ['DP 数据并行：不同副本处理不同请求', 'TP 张量并行：多张卡共同计算同一层', 'PP 流水线并行：不同卡负责不同层段', 'CP 上下文并行：分担同一条长序列', 'EP 专家并行：换成 MoE 模型，按专家分工'][Math.min($clicks, 4)] }}</p>
+<figure class="gemm-figure" aria-label="DP：完整副本，分别处理请求">
+  <p class="gemm-context">不同副本各自完成推理</p>
   <svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
 <defs>
-    <marker id="parallel-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker>
-    </defs>
-    <g transform="translate(-90 0)">
+<marker id="parallel-0-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible">
+<path class="arrowhead" d="M 2 2 L 10 6 L 2 10" />
+</marker>
+</defs>
+<g transform="translate(-90 0)">
     <rect class="device" x="270" y="126" width="310" height="232" rx="3" />
     <text class="matrix-name" x="425" y="160">GPU 0</text>
     <rect class="device" x="770" y="126" width="310" height="232" rx="3" />
     <text class="matrix-name" x="925" y="160">GPU 1</text>
-    <g v-if="$clicks === 0" class="step-arrival">
     <text class="trace-text" x="425" y="79">请求 A</text>
-    <path class="" d="M 425 89 V 119" marker-end="url(#parallel-arrow)" />
+    <path class="" d="M 425 89 V 119" marker-end="url(#parallel-0-arrow)" />
     <text class="annotation" x="425" y="202">完整模型</text>
     <rect class="output-tile" x="323" y="219" width="204" height="26" rx="3" />
     <rect class="output-tile" x="323" y="259" width="204" height="26" rx="3" />
     <rect class="output-tile" x="323" y="299" width="204" height="26" rx="3" />
     <text class="trace-text" x="925" y="79">请求 B</text>
-    <path class="" d="M 925 89 V 119" marker-end="url(#parallel-arrow)" />
+    <path class="" d="M 925 89 V 119" marker-end="url(#parallel-0-arrow)" />
     <text class="annotation" x="925" y="202">完整模型</text>
     <rect class="output-tile" x="823" y="219" width="204" height="26" rx="3" />
     <rect class="output-tile" x="823" y="259" width="204" height="26" rx="3" />
     <rect class="output-tile" x="823" y="299" width="204" height="26" rx="3" />
     <text class="annotation" x="675" y="412">各自完成推理，分别维护 KV Cache</text>
-    </g>
-    <g v-else-if="$clicks === 1" class="step-arrival">
-    <text class="annotation" x="425" y="203">同一层的权重分片</text>
-    <rect class="output-tile" x="335" y="224" width="180" height="88" rx="3" />
-    <path class="grid-line" d="M 380 224 V 312" />
-    <path class="grid-line" d="M 425 224 V 312" />
-    <path class="grid-line" d="M 470 224 V 312" />
-    <text class="annotation" x="425" y="341">部分结果 Y₀</text>
-    <text class="annotation" x="925" y="203">同一层的权重分片</text>
-    <rect class="tile-input" x="835" y="224" width="180" height="88" rx="3" />
-    <path class="grid-line" d="M 880 224 V 312" />
-    <path class="grid-line" d="M 925 224 V 312" />
-    <path class="grid-line" d="M 970 224 V 312" />
-    <text class="annotation" x="925" y="341">部分结果 Y₁</text>
-    <path class="" d="M 580 269 H 643" marker-end="url(#parallel-arrow)" />
-    <path class="" d="M 770 269 H 707" marker-end="url(#parallel-arrow)" />
-    <circle class="operation" cx="675" cy="269" r="25" />
-    <text class="" x="675" y="279">＋</text>
-    <path class="" d="M 675 295 V 371" marker-end="url(#parallel-arrow)" />
-    <text class="trace-text" x="675" y="410">相加得到完整输出</text>
-    </g>
-    <g v-else-if="$clicks === 2" class="step-arrival">
+</g>
+  </svg>
+  <figcaption class="gemm-takeaway">增加副本，扩展并发处理能力</figcaption>
+</figure>
+
+::footer::
+
+<span>网络 · 多卡分工与通信</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+推理 DP 中各副本不做训练的梯度同步，KV 各自维护；完整权重需重复存储。更多副本不直接缩短单条请求的前向路径。
+参考：https://jax-ml.github.io/scaling-book/gpus/
+推理DP：https://docs.vllm.ai/en/latest/serving/data_parallel_deployment/
+CP：https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/features/context_parallel.html
+EP：https://docs.vllm.ai/en/latest/serving/expert_parallel_deployment/
+-->
+
+---
+class: diagram-page
+clicks: 1
+---
+
+# DP：请求数相同，工作量可能差很多
+
+::left::
+
+<figure class="gemm-figure" aria-label="DP：请求数相同，工作量可能差很多">
+  <p class="gemm-context">{{ $clicks === 0 ? '问题：只按请求数均分，把两个长请求分到同一副本' : '方法：结合输入长度和当前负载，为新请求选择副本，动态调度' }}</p>
+  <svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs>
+<marker id="dp-balance-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible">
+<path class="arrowhead" d="M 2 2 L 10 6 L 2 10" />
+</marker>
+</defs>
+<text class="left-label matrix-name" x="40" y="102" >四条新请求：两条长输入、两条短输入</text>
+<text class="" x="126" y="203" >副本 0</text>
+<text class="" x="126" y="316" >副本 1</text>
+<rect class="wait-region" x="275" y="164" width="770" height="68" rx="3" />
+<rect class="wait-region" x="275" y="277" width="770" height="68" rx="3" />
+<g v-if="$clicks === 0" class="step-arrival">
+<rect class="tile-input" x="275" y="164" width="350" height="68" rx="3" />
+<text class="compact-label" x="450.0" y="207" >长 A</text>
+<rect class="tile-input" x="635" y="164" width="350" height="68" rx="3" />
+<text class="compact-label" x="810.0" y="207" >长 B</text>
+<rect class="output-tile" x="275" y="277" width="70" height="68" rx="3" />
+<text class="compact-label" x="310.0" y="320" >短 C</text>
+<rect class="output-tile" x="355" y="277" width="70" height="68" rx="3" />
+<text class="compact-label" x="390.0" y="320" >短 D</text>
+</g>
+<g v-else class="step-arrival">
+<rect class="tile-input" x="275" y="164" width="350" height="68" rx="3" />
+<text class="compact-label" x="450.0" y="207" >长 A</text>
+<rect class="output-tile" x="635" y="164" width="70" height="68" rx="3" />
+<text class="compact-label" x="670.0" y="207" >短 C</text>
+<rect class="tile-input" x="275" y="277" width="350" height="68" rx="3" />
+<text class="compact-label" x="450.0" y="320" >长 B</text>
+<rect class="output-tile" x="635" y="277" width="70" height="68" rx="3" />
+<text class="compact-label" x="670.0" y="320" >短 D</text>
+</g>
+<path class="" d="M 275 384 H 1050" marker-end="url(#dp-balance-arrow)" />
+<text class="annotation" x="665" y="417" >预计待处理工作量（示意）</text>
+  </svg>
+  <figcaption class="gemm-takeaway">{{ $clicks === 0 ? '一个副本在排队，另一个副本已经空闲' : '按工作量分配，让空闲的副本接到合适的请求' }}</figcaption>
+</figure>
+
+::footer::
+
+<span>网络 · 多卡分工与通信</span><span>步骤 {{ Math.min($clicks, 1) + 1 }} / 2</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+两长两短共四条新请求，上下两行是副本预计剩余工作量，不是同步流水线。第一步只按数量分配，两个长请求集中于一个副本；第二步在请求进入服务前按长度/当前负载分配，每个副本一长一短。条形是定性示意，不等于真实运行时间，不将长度与总时长视为严格线性。
+[click] 实际调度还应估计输出长度、已占 KV、前缀亲和性和等待时长；优先分配新请求，不暗示迁移活跃请求无须搬 KV。效果是缓解热点和排队，不是要求独立副本互相等待，也不是保证所有请求等时完成。
+参考：https://docs.vllm.ai/en/latest/serving/data_parallel_deployment/
+-->
+
+---
+class: diagram-page
+clicks: 0
+---
+
+# TP：部分和相加，才是完整输出
+
+::left::
+
+<figure class="gemm-figure" aria-label="Qwen MLP down_proj 沿输入维度切分：H0W0 和 H1W1 均为 m×4096 的部分和。All-Reduce 将同位置元素相加，并让两卡各得到完整输出 Y。">
+<p class="gemm-context">down_proj：H = [H₀ H₁]，沿求和维度切成 6144 + 6144</p>
+<svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs><marker id="tp-sum-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker></defs>
+<rect class="device" x="35" y="90" width="360" height="344" rx="3" />
+<rect class="device" x="773" y="90" width="360" height="344" rx="3" />
+<text class="matrix-name" x="215" y="125">GPU 0</text>
+<text class="matrix-name" x="953" y="125">GPU 1</text>
+<rect class="output-tile" x="55" y="140" width="140" height="88" rx="3" />
+<rect class="output-tile" x="225" y="140" width="150" height="88" rx="3" />
+<text x="125" y="174">H₀</text>
+<text class="annotation" x="125" y="210">m × 6144</text>
+<text x="300" y="174">W₀</text>
+<text class="annotation" x="300" y="210">6144 × 4096</text>
+<text x="210" y="192">×</text>
+<rect class="tile-input" x="793" y="140" width="140" height="88" rx="3" />
+<rect class="tile-input" x="963" y="140" width="150" height="88" rx="3" />
+<text x="863" y="174">H₁</text>
+<text class="annotation" x="863" y="210">m × 6144</text>
+<text x="1038" y="174">W₁</text>
+<text class="annotation" x="1038" y="210">6144 × 4096</text>
+<text x="948" y="192">×</text>
+<rect class="output-tile" x="65" y="253" width="300" height="68" rx="3" />
+<rect class="tile-input" x="803" y="253" width="300" height="68" rx="3" />
+<text x="215" y="281">Y₀ = H₀W₀</text>
+<text class="annotation" x="215" y="312">部分和 · m × 4096</text>
+<text x="953" y="281">Y₁ = H₁W₁</text>
+<text class="annotation" x="953" y="312">部分和 · m × 4096</text>
+<text class="annotation" x="584" y="201">同一位置，逐元素相加</text>
+<rect class="operation" x="465" y="242" width="238" height="92" rx="3" />
+<text x="584" y="274">All-Reduce (SUM)</text>
+<text class="trace-text" x="584" y="309">Y = Y₀ + Y₁</text>
+<rect class="output-tile" x="65" y="372" width="300" height="48" rx="3" />
+<rect class="output-tile" x="803" y="372" width="300" height="48" rx="3" />
+<text x="215" y="404">完整 Y · m × 4096</text>
+<text x="953" y="404">完整 Y · m × 4096</text>
+<text class="trace-text" x="584" y="402">两卡各保留完整 Y</text>
+<path class="trace-line" d="M 373 287 H 457" marker-end="url(#tp-sum-arrow)" />
+<path class="memory-line" d="M 795 287 H 711" marker-end="url(#tp-sum-arrow)" />
+<path class="trace-line" d="M 584 342 V 346 H 215 V 364" marker-end="url(#tp-sum-arrow)" />
+<path class="trace-line" d="M 584 346 H 953 V 364" marker-end="url(#tp-sum-arrow)" />
+</svg>
+<figcaption class="gemm-takeaway">需要通过 All Reduce 通信操作</figcaption>
+</figure>
+
+::footer::
+
+<span>网络 · 多卡分工与通信</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+2026-10-29：把 All-Reduce 的原因从“合并结果”展开为矩阵分解。承接第20页的 Qwen3-8B MLP，H[m,12288] 是 SiLU(gate)⊙up 后的中间激活。按通道切成 H=[H0 H1]，down 的数学权重 W[12288,4096] 沿行切成竖向堆叠的 W0、W1。于是 HW=H0W0+H1W1。PyTorch Linear 通常保存转置权重，行/列在这里均指数学矩阵布局。
+对任意同一输出元素 y[r,j]，GPU0 只求 i=0..6143 的和，GPU1 只求 i=6144..12287 的和。两卡都得到 m×4096，但都未包含全部输入通道的贡献，因此这些是部分和，不是输出通道的两半。All-Gather 只是拼接两份部分和，不能替代元素对应相加。
+本例下一层按列并行接收复制布局的输入，所以每卡需要同样的完整 Y。Reduce 完成求和，All 表示结果在所有参与卡上可用；All-Reduce(SUM) 正好满足两项要求。图中的集中方框表示集合通信语义，不代表有一张中央GPU或必须先集中再广播；实际可采用 ring、tree 等实现。
+若后续只需要分片输出，可以用 ReduceScatter 并调整后续布局，不必强制每个算子之后做 All-Reduce。求和是此切分下的代数要求，结果放到哪些卡由下一步布局决定。权重/激活切分方式不同，通信也不同。
+来源：https://arxiv.org/html/1909.08053v4#S3
+来源：https://jax-ml.github.io/scaling-book/sharding/
+实现参考：https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/tensor_parallel/layers.py
+-->
+
+---
+class: diagram-page
+clicks: 1
+---
+
+# TP：计算节省与通信代价
+
+::left::
+
+<figure class="gemm-figure" aria-label="TP=2 和 TP=8 的 down_proj：每卡权重减少，输出部分和仍为 m×4096。点击后显示8卡，比较计算节省和通信代价。">
+<p class="gemm-context">{{ $clicks === 0 ? '同一个 down_proj：固定 m，输出维度为 4096' : 'TP = 2 → 8：每卡乘加次数降至 1/4，部分输出大小不变' }}</p>
+<svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs><marker id="tp-scaling-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker></defs>
+<text class="" x="270" y="76" >权重 W</text>
+<text class="" x="612" y="76" >本卡部分和</text>
+<text class="" x="995" y="76" >跨卡求和</text>
+<g class="step-arrival"><text class="" x="74" y="175" >TP = 2</text>
+<rect class="matrix-base" x="175" y="110" width="190" height="110" rx="3" />
+<rect class="output-tile" x="175" y="110" width="190" height="55.0" rx="3" />
+<path class="grid-line" d="M 175 165.0 H 365" />
+<text class="annotation" x="270" y="249" >每卡 1/2 权重</text>
+<rect class="output-tile" x="505" y="110" width="215" height="110" rx="3" />
+<text class="" x="612" y="154" >Yᵢ = HᵢWᵢ</text>
+<text class="trace-text" x="612" y="192" >m × 4096</text>
+<rect class="tile-input" x="880" y="110" width="240" height="110" rx="3" />
+<text class="" x="1000" y="154" >All-Reduce</text>
+<text class="annotation" x="1000" y="192" >2 卡参与求和</text>
+<path class="trace-line" d="M 373 165 H 497" marker-end="url(#tp-scaling-arrow)" />
+<text class="annotation" x="435" y="147" >GEMM</text>
+<path class="memory-line" d="M 728 165 H 872" marker-end="url(#tp-scaling-arrow)" />
+<text class="annotation" x="800" y="147" >部分和</text></g>
+<g class="step-arrival" v-if="$clicks >= 1"><text class="" x="74" y="350" >TP = 8</text>
+<rect class="matrix-base" x="175" y="285" width="190" height="110" rx="3" />
+<rect class="output-tile" x="175" y="285" width="190" height="13.75" rx="3" />
+<path class="grid-line" d="M 175 298.75 H 365" />
+<path class="grid-line" d="M 175 312.5 H 365" />
+<path class="grid-line" d="M 175 326.25 H 365" />
+<path class="grid-line" d="M 175 340.0 H 365" />
+<path class="grid-line" d="M 175 353.75 H 365" />
+<path class="grid-line" d="M 175 367.5 H 365" />
+<path class="grid-line" d="M 175 381.25 H 365" />
+<text class="annotation" x="270" y="424" >每卡 1/8 权重</text>
+<rect class="output-tile" x="505" y="285" width="215" height="110" rx="3" />
+<text class="" x="612" y="329" >Yᵢ = HᵢWᵢ</text>
+<text class="trace-text" x="612" y="367" >m × 4096</text>
+<rect class="tile-input" x="880" y="285" width="240" height="110" rx="3" />
+<text class="" x="1000" y="329" >All-Reduce</text>
+<text class="annotation" x="1000" y="367" >8 卡参与求和</text>
+<path class="trace-line" d="M 373 340 H 497" marker-end="url(#tp-scaling-arrow)" />
+<text class="annotation" x="435" y="322" >GEMM</text>
+<path class="memory-line" d="M 728 340 H 872" marker-end="url(#tp-scaling-arrow)" />
+<text class="annotation" x="800" y="322" >部分和</text></g>
+</svg>
+<figcaption class="gemm-takeaway">{{ $clicks === 0 ? '每卡只算一部分，完整输出仍依赖所有卡' : '增加 GPU，省下的计算时间能否覆盖通信代价？' }}</figcaption>
+</figure>
+
+::footer::
+
+<span>网络 · TP 的扩展与优化</span><span>步骤 {{ Math.min($clicks, 1) + 1 }} / 2</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+Qwen3-8B MLP down_proj：H[m,12288] × W[12288,4096]。本页限定按 K 维切分、输出复制的标准 TP 布局，m 与精度固定。蓝色权重条表示一张卡持有的行分片，灰色部分在其他卡。TP=2 时每卡权重 6144×4096；TP=8 时为1536×4096。每卡部分和始终是 m×4096，需要所有卡贡献相加。
+[click] 每卡权重元素数、理想权重读取量及乘加次数从 TP2 到 TP8 降至1/4，但不能据此推导算子耗时也降至1/4；kernel效率与实际访存仍取决于形状和实现。待归约张量大小没有变，实际网络流量与通信时间取决于算法、参与者、拓扑与消息大小，并非严格常数。
+这里的问题是：新增GPU省下的本地执行时间，能否超过通信与同步代价？接下来分别优化算子衔接、collective实现，以及计算通信协同。不是先假定一个低效串行实现再把重叠当作唯一答案。某些布局可用ReduceScatter/AllGather，图不宣称所有TP始终使用完整All-Reduce。
+来源：https://jax-ml.github.io/scaling-book/inference/#appendix-c-latency-bound-communications
+来源：https://nvidia.github.io/TensorRT-LLM/performance/performance-tuning-guide/deciding-model-sharding-strategy.html
+来源：https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html
+-->
+
+---
+class: diagram-page
+clicks: 2
+---
+
+# 算子与访存：减少中间搬运
+
+::left::
+
+<figure class="gemm-figure" aria-label="点击展示两项优化：GEMM直接写入通信缓冲区省去额外拷贝，ResidualAdd与RMSNorm融合省去中间读写。All-Reduce始终保留。">
+<p class="gemm-context">{{ $clicks === 0 ? '一个 MLP 出口：通信缓冲区与后续算子的衔接' : $clicks === 1 ? 'GEMM 直接写入通信缓冲区' : 'Residual Add 与 RMSNorm 在一个 kernel 内完成' }}</p>
+<svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs><marker id="tp-fusion-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker></defs>
+<text class="annotation" x="65" y="150" >归约前</text>
+<text class="annotation" x="65" y="358" >归约后</text>
+<rect class="output-tile" x="150" y="112" width="160" height="70" rx="3" />
+<text class="" x="230" y="155" >GEMM</text>
+<rect class="tile-input" x="680" y="112" width="190" height="70" rx="3" />
+<text class="" x="775" y="155" >通信缓冲区</text>
+<rect class="operation" x="950" y="112" width="185" height="70" rx="3" />
+<text class="" x="1042" y="155" >All-Reduce</text>
+<path class="memory-line" d="M 878 147 H 942" marker-end="url(#tp-fusion-arrow)" />
+<g class="step-arrival" v-if="$clicks === 0"><rect class="tile-input" x="390" y="112" width="170" height="70" rx="3" />
+<text class="" x="475" y="155" >本地输出</text>
+<path class="trace-line" d="M 318 147 H 382" marker-end="url(#tp-fusion-arrow)" />
+<path class="memory-line" d="M 568 147 H 672" marker-end="url(#tp-fusion-arrow)" />
+<text class="annotation" x="350" y="99" >写入</text>
+<text class="memory-text" x="620" y="99" >拷贝</text>
+<text class="annotation" x="642" y="229" >同一份部分和，先后占用两个缓冲区</text></g>
+<g class="step-arrival" v-else><path class="trace-line" d="M 318 147 H 672" marker-end="url(#tp-fusion-arrow)" />
+<text class="trace-text" x="495" y="125" >直接写入通信缓冲区</text>
+<text class="trace-text" x="642" y="229" >省去本地输出到通信缓冲区的拷贝</text></g>
+<g class="step-arrival" v-if="$clicks < 2"><rect class="output-tile" x="150" y="320" width="220" height="70" rx="3" />
+<text class="" x="260" y="363" >Residual Add</text>
+<rect class="tile-input" x="500" y="320" width="200" height="70" rx="3" />
+<text class="" x="600" y="363" >中间张量</text>
+<rect class="output-tile" x="920" y="320" width="215" height="70" rx="3" />
+<text class="" x="1027" y="363" >RMSNorm</text>
+<path class="memory-line" d="M 378 355 H 492" marker-end="url(#tp-fusion-arrow)" />
+<path class="memory-line" d="M 708 355 H 912" marker-end="url(#tp-fusion-arrow)" />
+<text class="annotation" x="435" y="307" >写回 HBM</text>
+<text class="annotation" x="810" y="307" >读取 HBM</text>
+<text class="annotation" x="642" y="429" >两个 kernel 通过显存交换中间结果</text></g>
+<g class="step-arrival" v-else><rect class="hardware-boundary" x="135" y="304" width="1015" height="102" rx="3" />
+<text class="trace-text" x="642" y="291" >一个融合 kernel</text>
+<rect class="output-tile" x="150" y="320" width="220" height="70" rx="3" />
+<text class="" x="260" y="363" >Residual Add</text>
+<rect class="output-tile" x="920" y="320" width="215" height="70" rx="3" />
+<text class="" x="1027" y="363" >RMSNorm</text>
+<path class="trace-line" d="M 378 355 H 912" marker-end="url(#tp-fusion-arrow)" />
+<text class="trace-text" x="642" y="340" >中间值直接用于归一化</text>
+<text class="trace-text" x="642" y="429" >省去中间张量的写回与重读</text></g>
+</svg>
+<figcaption class="gemm-takeaway">{{ $clicks === 0 ? '必要的求和之外，还有拷贝、读写与启动开销' : $clicks === 1 ? '计算与通信共用输出缓冲区，省去一次额外拷贝' : '减少中间读写和 kernel 启动，跨卡求和保持不变' }}</figcaption>
+</figure>
+
+::footer::
+
+<span>网络 · TP 的扩展与优化</span><span>步骤 {{ Math.min($clicks, 2) + 1 }} / 3</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+本页追踪一个TP MLP出口的局部执行开销。上下两行分别表示归约前与归约后的子过程，没有改变All-Reduce的数学语义。初始展示存在额外通信缓冲区拷贝、ResidualAdd与RMSNorm分开执行的对照实现，不声称所有引擎默认都这样做。
+[click] 若通信实现允许producer写入其注册/共享的用户缓冲区，GEMM可直接生成通信输入，删除本地输出到通信缓冲区的额外拷贝。原始输出写入、跨卡传输与必要同步仍然存在。“共用”指同一GPU上的计算与通信使用同一输出分配，不代表跨GPU零成本共享HBM。实际需满足通信buffer布局、注册、生命周期和同步条件。
+[click] 在All-Reduce结果就绪后，把ResidualAdd与RMSNorm融合，使用已得到的残差相加结果计算该token的归一化统计量和输出，减少中间tensor物化和一次kernel启动。最终输出及模型需要保留的残差数据仍可能写回HBM；图仅删除可省的临时中间张量，不宣称一切零访存。没有把RMSNorm提前到部分和归约之前。
+TensorRT-LLM公布了Reduce Fusion与User Buffer两种实际优化。此处展示概念路径，具体支持范围依版本、模型和后端而定；不把文中一揽子吞吐提升归因于单个操作。本页不用未测量的百分比。
+来源：https://developer.nvidia.com/blog/boost-llama-model-performance-on-microsoft-azure-ai-foundry-with-nvidia-tensorrt-llm/
+-->
+
+---
+class: diagram-page
+clicks: 2
+---
+
+# 通信算法：同样求和，减少通信阶段
+
+::left::
+
+<figure class="gemm-figure" aria-label="四卡向量求和。初始Ring需要六个通信阶段；点击后MultiShot先让每卡求和一个分片，再经NVSwitch多播，让每卡得到完整结果。">
+<p class="gemm-context">{{ $clicks === 0 ? '4 GPU，对同一个四分片向量执行 All-Reduce' : $clicks === 1 ? 'MultiShot 第 1 阶段：每张卡汇总自己负责的分片' : 'MultiShot 第 2 阶段：NVSwitch 多播各卡的结果分片' }}</p>
+<svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs><marker id="tp-collective-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker></defs>
+<rect class="device" x="80" y="100" width="190" height="100" rx="3" />
+<text class="" x="175" y="132" >GPU 0</text>
+<rect x="90" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 0 === 0) ? 'output-tile' : 'matrix-base'" />
+<text x="110" y="175" class="compact-label">{{ $clicks === 0 ? 1 : ($clicks === 2 || 0 === 0) ? 10 : '·' }}</text>
+<rect x="132" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 0 === 1) ? 'output-tile' : 'matrix-base'" />
+<text x="152" y="175" class="compact-label">{{ $clicks === 0 ? 1 : ($clicks === 2 || 0 === 1) ? 10 : '·' }}</text>
+<rect x="174" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 0 === 2) ? 'output-tile' : 'matrix-base'" />
+<text x="194" y="175" class="compact-label">{{ $clicks === 0 ? 1 : ($clicks === 2 || 0 === 2) ? 10 : '·' }}</text>
+<rect x="216" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 0 === 3) ? 'output-tile' : 'matrix-base'" />
+<text x="236" y="175" class="compact-label">{{ $clicks === 0 ? 1 : ($clicks === 2 || 0 === 3) ? 10 : '·' }}</text>
+<rect class="device" x="350" y="100" width="190" height="100" rx="3" />
+<text class="" x="445" y="132" >GPU 1</text>
+<rect x="360" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 1 === 0) ? 'output-tile' : 'matrix-base'" />
+<text x="380" y="175" class="compact-label">{{ $clicks === 0 ? 2 : ($clicks === 2 || 1 === 0) ? 10 : '·' }}</text>
+<rect x="402" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 1 === 1) ? 'output-tile' : 'matrix-base'" />
+<text x="422" y="175" class="compact-label">{{ $clicks === 0 ? 2 : ($clicks === 2 || 1 === 1) ? 10 : '·' }}</text>
+<rect x="444" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 1 === 2) ? 'output-tile' : 'matrix-base'" />
+<text x="464" y="175" class="compact-label">{{ $clicks === 0 ? 2 : ($clicks === 2 || 1 === 2) ? 10 : '·' }}</text>
+<rect x="486" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 1 === 3) ? 'output-tile' : 'matrix-base'" />
+<text x="506" y="175" class="compact-label">{{ $clicks === 0 ? 2 : ($clicks === 2 || 1 === 3) ? 10 : '·' }}</text>
+<rect class="device" x="620" y="100" width="190" height="100" rx="3" />
+<text class="" x="715" y="132" >GPU 2</text>
+<rect x="630" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 2 === 0) ? 'output-tile' : 'matrix-base'" />
+<text x="650" y="175" class="compact-label">{{ $clicks === 0 ? 3 : ($clicks === 2 || 2 === 0) ? 10 : '·' }}</text>
+<rect x="672" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 2 === 1) ? 'output-tile' : 'matrix-base'" />
+<text x="692" y="175" class="compact-label">{{ $clicks === 0 ? 3 : ($clicks === 2 || 2 === 1) ? 10 : '·' }}</text>
+<rect x="714" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 2 === 2) ? 'output-tile' : 'matrix-base'" />
+<text x="734" y="175" class="compact-label">{{ $clicks === 0 ? 3 : ($clicks === 2 || 2 === 2) ? 10 : '·' }}</text>
+<rect x="756" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 2 === 3) ? 'output-tile' : 'matrix-base'" />
+<text x="776" y="175" class="compact-label">{{ $clicks === 0 ? 3 : ($clicks === 2 || 2 === 3) ? 10 : '·' }}</text>
+<rect class="device" x="890" y="100" width="190" height="100" rx="3" />
+<text class="" x="985" y="132" >GPU 3</text>
+<rect x="900" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 3 === 0) ? 'output-tile' : 'matrix-base'" />
+<text x="920" y="175" class="compact-label">{{ $clicks === 0 ? 4 : ($clicks === 2 || 3 === 0) ? 10 : '·' }}</text>
+<rect x="942" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 3 === 1) ? 'output-tile' : 'matrix-base'" />
+<text x="962" y="175" class="compact-label">{{ $clicks === 0 ? 4 : ($clicks === 2 || 3 === 1) ? 10 : '·' }}</text>
+<rect x="984" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 3 === 2) ? 'output-tile' : 'matrix-base'" />
+<text x="1004" y="175" class="compact-label">{{ $clicks === 0 ? 4 : ($clicks === 2 || 3 === 2) ? 10 : '·' }}</text>
+<rect x="1026" y="150" width="40" height="34" rx="2" :class="$clicks === 0 ? 'tile-input' : ($clicks === 2 || 3 === 3) ? 'output-tile' : 'matrix-base'" />
+<text x="1046" y="175" class="compact-label">{{ $clicks === 0 ? 4 : ($clicks === 2 || 3 === 3) ? 10 : '·' }}</text>
+<g class="step-arrival" v-if="$clicks === 0"><path class="memory-line" d="M 278 150 H 342" marker-end="url(#tp-collective-arrow)" />
+<path class="memory-line" d="M 548 150 H 612" marker-end="url(#tp-collective-arrow)" />
+<path class="memory-line" d="M 818 150 H 882" marker-end="url(#tp-collective-arrow)" />
+<path class="memory-line" d="M 1088 150 H 1130 V 248 H 38 V 150 H 72" marker-end="url(#tp-collective-arrow)" />
+<text class="annotation" x="584" y="283" >Ring：逐邻居交换分片</text>
+<text class="" x="360" y="326" >ReduceScatter</text>
+<text class="" x="840" y="326" >AllGather</text>
+<rect class="tile-input" x="150" y="350" width="140" height="48" rx="3" />
+<text class="" x="220" y="382" >R1</text>
+<path class="quiet-line" d="M 294 374 H 306" />
+<rect class="tile-input" x="310" y="350" width="140" height="48" rx="3" />
+<text class="" x="380" y="382" >R2</text>
+<path class="quiet-line" d="M 454 374 H 466" />
+<rect class="tile-input" x="470" y="350" width="140" height="48" rx="3" />
+<text class="" x="540" y="382" >R3</text>
+<path class="quiet-line" d="M 614 374 H 626" />
+<rect class="output-tile" x="630" y="350" width="140" height="48" rx="3" />
+<text class="" x="700" y="382" >G1</text>
+<path class="quiet-line" d="M 774 374 H 786" />
+<rect class="output-tile" x="790" y="350" width="140" height="48" rx="3" />
+<text class="" x="860" y="382" >G2</text>
+<path class="quiet-line" d="M 934 374 H 946" />
+<rect class="output-tile" x="950" y="350" width="140" height="48" rx="3" />
+<text class="" x="1020" y="382" >G3</text>
+<text class="annotation" x="584" y="432" >4 卡：3 轮分片求和 + 3 轮结果传播</text></g>
+<g class="step-arrival" v-else><path class="memory-line" d="M 175 248 H 985" />
+<rect class="operation" x="470" y="273" width="230" height="54" rx="3" />
+<text class="" x="585" y="309" >NVSwitch</text>
+<path class="memory-line" d="M 585 265 V 248" />
+<path class="memory-line" d="M 175 240 V 208" marker-end="url(#tp-collective-arrow)" :marker-start="$clicks === 1 ? 'url(#tp-collective-arrow)' : null" />
+<path class="memory-line" d="M 445 240 V 208" marker-end="url(#tp-collective-arrow)" :marker-start="$clicks === 1 ? 'url(#tp-collective-arrow)' : null" />
+<path class="memory-line" d="M 715 240 V 208" marker-end="url(#tp-collective-arrow)" :marker-start="$clicks === 1 ? 'url(#tp-collective-arrow)' : null" />
+<path class="memory-line" d="M 985 240 V 208" marker-end="url(#tp-collective-arrow)" :marker-start="$clicks === 1 ? 'url(#tp-collective-arrow)' : null" />
+<text class="annotation" x="584" y="359" >每个分片：1 + 2 + 3 + 4 = 10</text>
+<rect x="310" y="382" width="230" height="48" rx="3" :class="$clicks === 1 ? 'tile-input' : 'operation'" />
+<text class="" x="425" y="414" >1 · 分片求和</text>
+<rect x="640" y="382" width="230" height="48" rx="3" :class="$clicks === 2 ? 'output-tile' : 'operation'" />
+<text class="" x="755" y="414" >2 · 多播结果</text>
+<path class="memory-line" d="M 548 406 H 632" marker-end="url(#tp-collective-arrow)" /></g>
+</svg>
+<figcaption class="gemm-takeaway">{{ $clicks === 0 ? 'Ring：4 卡需要 6 个通信阶段' : $clicks === 1 ? '每张卡负责一个分片的求和，结果暂时分布在各卡' : 'MultiShot：2 个阶段，各卡得到同样的完整结果' }}</figcaption>
+</figure>
+
+::footer::
+
+<span>网络 · TP 的扩展与优化</span><span>步骤 {{ Math.min($clicks, 2) + 1 }} / 3</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+本页比较同一All-Reduce的算法通信阶段，不比较实测时长。4个GPU的输入分别为[1,1,1,1]、[2,2,2,2]、[3,3,3,3]、[4,4,4,4]。四个单元分别代表四个向量分片；最终每卡均为[10,10,10,10]。标量只用于说明求和，真实分片包含许多元素。
+初始Ring为标准ReduceScatter再AllGather：p卡分别需要p−1和p−1轮，4卡共6阶段；每轮交换的是分片，不是重复发送整个张量。上方环形连线表达相邻通信，下面6框表示算法阶段而非时间尺度。NCCL会选择其他算法/协议，不把Ring当作所有场景唯一默认。
+[click] TensorRT-LLM MultiShot第一阶段：各卡交换分片，每个owner GPU累加自己负责的分片。例中GPU0持有第一分片的完整和10，其余类似。点号是当前结果布局中不归该卡所有的分片，不代表输入被销毁。此时每卡都只有完整结果的一部分。NVSwitch提供数据通路；求和在GPU完成，不把交换机画成中央归约计算器。双向连接表示第一阶段的发送和接收。
+[click] 第二阶段利用NVSwitch multicast广播每个owner的结果分片，各卡获得完整输出。NVSwitch框与传播箭头明确表示硬件条件。2阶段来自特定算法与拓扑支持，不是仅将AllReduce写成ReduceScatter+AllGather就自动实现2轮；普通Ring同样由这两种collective组成但共2(p−1)轮。
+原文报告特定测量下最高约3倍All-Reduce加速，不在页上承诺该收益或整模型加速。小消息更易受阶段/同步开销影响；大消息还需看带宽、拓扑和资源利用。图中步数不能直接换算倍数。
+来源：https://developer.nvidia.com/blog/3x-faster-allreduce-with-nvswitch-and-tensorrt-llm-multishot/
+-->
+
+---
+class: diagram-page
+clicks: 1
+---
+
+# 计算与通信：按 tile 流水重叠
+
+::left::
+
+<figure class="gemm-figure" aria-label="两个可回退的执行状态：先计算A、B、C再通信；点击后把各块通信提前到对应本地块就绪之后，与其他块计算重叠。示意不代表实测耗时。">
+<p class="gemm-context">{{ $clicks === 0 ? '未重叠的执行：完成本地 GEMM，再传输并归约结果' : '本地块沿 K 累加完成后，传输该块并继续计算其他块' }}</p>
+<svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs><marker id="tp-overlap-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker></defs>
+<text class="" x="81" y="180" >GEMM</text>
+<text class="" x="81" y="324" >通信</text>
+<text class="annotation left-label" x="190" y="90">本卡输出 tile</text>
+<path class="plot-axis" d="M 180 402 H 1130" marker-end="url(#tp-overlap-arrow)" />
+<text class="annotation" x="655" y="434" >执行顺序示意</text>
+<rect class="output-tile" x="180" y="140" width="160" height="60" rx="3" />
+<text class="" x="260" y="178" >A</text>
+<rect class="output-tile" x="340" y="140" width="160" height="60" rx="3" />
+<text class="" x="420" y="178" >B</text>
+<rect class="output-tile" x="500" y="140" width="160" height="60" rx="3" />
+<text class="" x="580" y="178" >C</text>
+<g class="step-arrival" v-if="$clicks === 0"><rect class="wait-region" x="180" y="284" width="480" height="60" rx="3" />
+<text class="annotation" x="420" y="322" >等待本地 GEMM 完成</text></g>
+<g class="schedule-shift" :style="{ transform: 'translateX(' + ($clicks === 0 ? 660 : 340) + 'px)' }"><rect class="tile-input" x="0" y="284" width="150" height="60" rx="3" /><text class="" x="75" y="322" >A</text></g>
+<g class="schedule-shift" :style="{ transform: 'translateX(' + ($clicks === 0 ? 810 : 500) + 'px)' }"><rect class="tile-input" x="0" y="284" width="150" height="60" rx="3" /><text class="" x="75" y="322" >B</text></g>
+<g class="schedule-shift" :style="{ transform: 'translateX(' + ($clicks === 0 ? 960 : 660) + 'px)' }"><rect class="tile-input" x="0" y="284" width="150" height="60" rx="3" /><text class="" x="75" y="322" >C</text></g>
+<g class="step-arrival" v-if="$clicks === 0"><path class="memory-line" d="M 660 208 V 276" marker-end="url(#tp-overlap-arrow)" />
+<text class="annotation" x="865" y="245" >整次 GEMM 结束，再通信</text>
+<path class="budget-limit" d="M 1110 113 V 389" />
+<text class="annotation" x="1105" y="90" >完成</text></g>
+<g class="step-arrival" v-else><path class="memory-line" d="M 326 208 V 240 H 360 V 276" marker-end="url(#tp-overlap-arrow)" />
+<path class="memory-line" d="M 486 208 V 240 H 520 V 276" marker-end="url(#tp-overlap-arrow)" />
+<path class="memory-line" d="M 646 208 V 240 H 680 V 276" marker-end="url(#tp-overlap-arrow)" />
+<path class="budget-limit" d="M 810 113 V 389" />
+<text class="annotation" x="810" y="90" >完成</text></g>
+</svg>
+<figcaption class="gemm-takeaway">{{ $clicks === 0 ? '整层耗时包含本地执行，以及随后发生的通信等待' : '传输 A 与计算 B 重叠，后续计算仍需等待归约结果' }}</figcaption>
+</figure>
+
+::footer::
+
+<span>网络 · TP 的扩展与优化</span><span>步骤 {{ Math.min($clicks, 1) + 1 }} / 2</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+这是执行顺序的教学示意，不是时长测量、理论下界或加速比。A/B/C是不同输出tile，不是同一输出块沿K方向的尚未完成部分和。每块必须先完成本卡K分片的全部累加，才把本卡贡献交给通信。图假定其他rank能按对应顺序提供数据，展示可重叠的依赖关系；GPU/链路争用与尾部通信在实际调度中会改变结果。
+初始为未重叠的对照：本地GEMM全部结束后再传输并归约。不是声称所有现代引擎都存在此边界。
+[click] A本地计算完成后可发起A的传输，与不依赖A归约结果的B计算并行；后续B/C同理。每卡完整输出仍依赖所有rank贡献，不提前运行依赖完整归约结果的下一层。图中的“通信”概括tile传输、归约及需要的结果传播，实际可按ReduceScatter+AllGather等布局实现，不能只做ReduceScatter却声称每卡已有完整Y。
+FLUX把GEMM-ReduceScatter等依赖细分到tile，并将通信/等待逻辑与GEMM kernel结合，避免粗暴拆成许多独立小GEMM损伤效率。通信仍可能占用SM、内存带宽、buffer与同步资源；小batch时计算窗口短，收益可能有限。评价应使用整层/整token延迟，不能仅看重叠比例。图不保证所有通信隐藏，也不宣称中间数据始终留在寄存器或SMEM。
+来源：https://arxiv.org/html/2406.06858v4#S3
+来源：https://arxiv.org/html/2406.06858v4#S2.S3
+-->
+
+---
+class: diagram-page
+clicks: 0
+---
+
+# PP：按层划分，逐段传递激活
+
+::left::
+
+<figure class="gemm-figure" aria-label="PP：按层划分，逐段传递激活">
+  <p class="gemm-context">以 36 层模型为例，前后两段分别放在两张卡上</p>
+  <svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs>
+<marker id="parallel-2-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible">
+<path class="arrowhead" d="M 2 2 L 10 6 L 2 10" />
+</marker>
+</defs>
+<g transform="translate(-90 0)">
+    <rect class="device" x="270" y="126" width="310" height="232" rx="3" />
+    <text class="matrix-name" x="425" y="160">GPU 0</text>
+    <rect class="device" x="770" y="126" width="310" height="232" rx="3" />
+    <text class="matrix-name" x="925" y="160">GPU 1</text>
     <text class="annotation" x="425" y="203">第 1–18 层</text>
     <rect class="output-tile" x="335" y="224" width="180" height="25" rx="3" />
     <rect class="output-tile" x="335" y="265" width="180" height="25" rx="3" />
@@ -1294,22 +1800,122 @@ clicks: 4
     <rect class="output-tile" x="835" y="224" width="180" height="25" rx="3" />
     <rect class="output-tile" x="835" y="265" width="180" height="25" rx="3" />
     <rect class="output-tile" x="835" y="306" width="180" height="25" rx="3" />
-    <path class="" d="M 580 269 H 762" marker-end="url(#parallel-arrow)" />
+    <path class="" d="M 580 269 H 762" marker-end="url(#parallel-2-arrow)" />
     <text class="trace-text" x="675" y="240">激活</text>
-    <text class="annotation" x="345" y="395">GPU 0</text>
-<text class="annotation" x="345" y="437">GPU 1</text>
-<rect class="output-tile" x="430" y="372" width="160" height="31" />
-<text class="compact-label trace-text" x="510" y="395">请求 A</text>
-<rect class="tile-input" x="600" y="372" width="160" height="31" />
-<text class="compact-label memory-text" x="680" y="395">请求 B</text>
-<rect class="wait-region" x="430" y="414" width="160" height="31" />
-<text class="compact-label annotation" x="510" y="437">等待</text>
-<rect class="output-tile" x="600" y="414" width="160" height="31" />
-<text class="compact-label trace-text" x="680" y="437">请求 A</text>
-<rect class="tile-input" x="770" y="414" width="160" height="31" />
-<text class="compact-label memory-text" x="850" y="437">请求 B</text>
-    </g>
-    <g v-else-if="$clicks === 3" class="step-arrival">
+<text class="annotation" x="675" y="412" >激活从前一段传给后一段</text>
+</g>
+  </svg>
+  <figcaption class="gemm-takeaway">每张卡只保存并执行自己负责的层</figcaption>
+</figure>
+
+::footer::
+
+<span>网络 · 多卡分工与通信</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+层数相同不保证耗时相同，还需考虑 embedding/head 等。一条请求同一次前向依次经过各段；不同请求可以在不同段同时执行。
+参考：https://jax-ml.github.io/scaling-book/gpus/
+推理DP：https://docs.vllm.ai/en/latest/serving/data_parallel_deployment/
+CP：https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/features/context_parallel.html
+EP：https://docs.vllm.ai/en/latest/serving/expert_parallel_deployment/
+-->
+
+---
+class: diagram-page
+clicks: 1
+---
+
+# PP：任务不足，流水线就会空着
+
+::left::
+
+<figure class="gemm-figure" aria-label="PP：任务不足，流水线就会空着">
+    <svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs>
+<marker id="pp-fill-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible">
+<path class="arrowhead" d="M 2 2 L 10 6 L 2 10" />
+</marker>
+</defs>
+<text class="" x="110" y="204" >前半层</text>
+<text class="" x="110" y="316" >后半层</text>
+<text class="annotation" x="350" y="110" >时段 1</text>
+<text class="annotation" x="558" y="110" >时段 2</text>
+<text class="annotation" x="766" y="110" >时段 3</text>
+<text class="annotation" x="974" y="110" >时段 4</text>
+<g v-if="$clicks === 0" class="step-arrival">
+<rect class="output-tile" x="253" y="160" width="194" height="70" rx="3" />
+<text class="trace-text" x="350" y="204" >请求 A</text>
+<rect class="wait-region" x="461" y="160" width="194" height="70" rx="3" />
+<text class="annotation" x="558" y="204" >空闲</text>
+<rect class="wait-region" x="669" y="160" width="194" height="70" rx="3" />
+<text class="annotation" x="766" y="204" >空闲</text>
+<rect class="wait-region" x="877" y="160" width="194" height="70" rx="3" />
+<text class="annotation" x="974" y="204" >空闲</text>
+<rect class="wait-region" x="253" y="272" width="194" height="70" rx="3" />
+<text class="annotation" x="350" y="316" >空闲</text>
+<rect class="output-tile" x="461" y="272" width="194" height="70" rx="3" />
+<text class="trace-text" x="558" y="316" >请求 A</text>
+<rect class="wait-region" x="669" y="272" width="194" height="70" rx="3" />
+<text class="annotation" x="766" y="316" >空闲</text>
+<rect class="wait-region" x="877" y="272" width="194" height="70" rx="3" />
+<text class="annotation" x="974" y="316" >空闲</text>
+</g>
+<g v-else class="step-arrival">
+<rect class="output-tile" x="253" y="160" width="194" height="70" rx="3" />
+<text class="trace-text" x="350" y="204" >请求 A</text>
+<rect class="output-tile" x="461" y="160" width="194" height="70" rx="3" />
+<text class="trace-text" x="558" y="204" >请求 B</text>
+<rect class="output-tile" x="669" y="160" width="194" height="70" rx="3" />
+<text class="trace-text" x="766" y="204" >请求 C</text>
+<rect class="wait-region" x="877" y="160" width="194" height="70" rx="3" />
+<text class="annotation" x="974" y="204" >空闲</text>
+<rect class="wait-region" x="253" y="272" width="194" height="70" rx="3" />
+<text class="annotation" x="350" y="316" >空闲</text>
+<rect class="output-tile" x="461" y="272" width="194" height="70" rx="3" />
+<text class="trace-text" x="558" y="316" >请求 A</text>
+<rect class="output-tile" x="669" y="272" width="194" height="70" rx="3" />
+<text class="trace-text" x="766" y="316" >请求 B</text>
+<rect class="output-tile" x="877" y="272" width="194" height="70" rx="3" />
+<text class="trace-text" x="974" y="316" >请求 C</text>
+</g>
+<path class="" d="M 253 379 H 1080" marker-end="url(#pp-fill-arrow)" />
+<text class="annotation" x="665" y="415" >同一请求逐段执行；不同请求可在不同段同时执行</text>
+  </svg>
+  <figcaption class="gemm-takeaway">{{ $clicks === 0 ? '分层省下了每卡容量，却没有让这一条请求并行起来' : '需要用请求并发填充流水线' }}</figcaption>
+</figure>
+
+::footer::
+
+<span>网络 · 多卡分工与通信</span><span>步骤 {{ Math.min($clicks, 1) + 1 }} / 2</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+用相同长度的格子表示等耗时阶段的教学时序，不是测量。初始单个请求 A 的一次前向先经前半层，再经后半层，其余时段空闲。
+[click] 独立请求 A/B/C 依次进入，GPU0 计算 B 时 GPU1 可计算 A。示意可以对应独立 Prefill/解码迭代的微批，不能把 A 未生成的下一个 token 提前放进去。需要足够并发，阶段工作量需平衡，填充与排空仍在；更多排队也可能增加单请求等待。不套用训练中的零气泡结论。
+参考：https://jax-ml.github.io/scaling-book/gpus/
+-->
+
+---
+class: diagram-page
+clicks: 0
+---
+
+# CP：长上下文，分给多张卡
+
+::left::
+
+<figure class="gemm-figure" aria-label="CP：长上下文，分给多张卡">
+  <p class="gemm-context">同一条序列按 token 分片，分担 KV 与 Attention 工作</p>
+  <svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs>
+<marker id="parallel-3-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible">
+<path class="arrowhead" d="M 2 2 L 10 6 L 2 10" />
+</marker>
+</defs>
+<g transform="translate(-90 0)">
+    <rect class="device" x="270" y="126" width="310" height="232" rx="3" />
+    <text class="matrix-name" x="425" y="160">GPU 0</text>
+    <rect class="device" x="770" y="126" width="310" height="232" rx="3" />
+    <text class="matrix-name" x="925" y="160">GPU 1</text>
     <text class="annotation" x="425" y="203">同一条序列的一部分</text>
     <rect class="output-tile" x="308" y="225" width="49" height="40" rx="3" />
     <text class="annotation" x="332" y="253">1</text>
@@ -1332,15 +1938,118 @@ clicks: 4
     <text class="annotation" x="1012" y="253">8</text>
     <rect class="tile-input" x="808" y="286" width="229" height="44" rx="3" />
     <text class="memory-text" x="922" y="316">本地 KV</text>
-    <path class="" d="M 590 268 H 760" marker-end="url(#parallel-arrow)" marker-start="url(#parallel-arrow)" />
+    <path class="" d="M 590 268 H 760" marker-end="url(#parallel-3-arrow)" marker-start="url(#parallel-3-arrow)" />
     <text class="annotation" x="675" y="214">Attention</text>
     <text class="annotation" x="675" y="250">通信</text>
     <text class="annotation" x="675" y="411">Attention 仍需要其他分片的信息</text>
-    </g>
-    <g v-else class="step-arrival">
+</g>
+  </svg>
+  <figcaption class="gemm-takeaway">本地只保存一部分 KV，Attention 仍有跨卡依赖</figcaption>
+</figure>
+
+::footer::
+
+<span>网络 · 多卡分工与通信</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+简图只说明 CP 的分工，Prefill 与 Decode 具体算法不同。Megatron 语境的 SP 只分部分逐 token 激活，不等于 CP。下一页聚焦长序列 Prefill 的 KV 分块通信。
+参考：https://jax-ml.github.io/scaling-book/gpus/
+推理DP：https://docs.vllm.ai/en/latest/serving/data_parallel_deployment/
+CP：https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/features/context_parallel.html
+EP：https://docs.vllm.ai/en/latest/serving/expert_parallel_deployment/
+-->
+
+---
+class: diagram-page
+clicks: 1
+---
+
+# CP：本地算得快，也可能在等远端 KV
+
+::left::
+
+<figure class="gemm-figure" aria-label="CP：本地算得快，也可能在等远端 KV">
+  <p class="gemm-context">{{ $clicks === 0 ? '问题：一次等齐远端 KV，通信和 Attention 串行发生' : '应对：KV 分块交换，接收下一块时计算当前块' }}</p>
+  <svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs>
+<marker id="cp-overlap-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible">
+<path class="arrowhead" d="M 2 2 L 10 6 L 2 10" />
+</marker>
+</defs>
+<text class="" x="110" y="197" >接收远端 KV</text>
+<text class="" x="110" y="315" >本地 Attention</text>
+<g v-if="$clicks === 0" class="step-arrival">
+<rect class="wait-region" x="260" y="273" width="420" height="70" rx="3"/>
+<text x="470" y="317" class="compact-label">等待数据</text>
+<rect class="tile-input" x="260" y="155" width="132" height="70" rx="3"/>
+<text x="326" y="199" class="compact-label">KV 块 1</text>
+<rect class="output-tile" x="692" y="273" width="132" height="70" rx="3"/>
+<text x="758" y="317" class="compact-label">计算 1</text>
+<rect class="tile-input" x="404" y="155" width="132" height="70" rx="3"/>
+<text x="470" y="199" class="compact-label">KV 块 2</text>
+<rect class="output-tile" x="836" y="273" width="132" height="70" rx="3"/>
+<text x="902" y="317" class="compact-label">计算 2</text>
+<rect class="tile-input" x="548" y="155" width="132" height="70" rx="3"/>
+<text x="614" y="199" class="compact-label">KV 块 3</text>
+<rect class="output-tile" x="980" y="273" width="132" height="70" rx="3"/>
+<text x="1046" y="317" class="compact-label">计算 3</text>
+</g>
+<g v-else class="step-arrival">
+<rect class="tile-input" x="260" y="155" width="132" height="70" rx="3"/>
+<text x="326" y="199" class="compact-label">KV 块 1</text>
+<rect class="output-tile" x="404" y="273" width="132" height="70" rx="3"/>
+<text x="470" y="317" class="compact-label">计算 1</text>
+<rect class="tile-input" x="404" y="155" width="132" height="70" rx="3"/>
+<text x="470" y="199" class="compact-label">KV 块 2</text>
+<rect class="output-tile" x="548" y="273" width="132" height="70" rx="3"/>
+<text x="614" y="317" class="compact-label">计算 2</text>
+<rect class="tile-input" x="548" y="155" width="132" height="70" rx="3"/>
+<text x="614" y="199" class="compact-label">KV 块 3</text>
+<rect class="output-tile" x="692" y="273" width="132" height="70" rx="3"/>
+<text x="758" y="317" class="compact-label">计算 3</text>
+</g>
+<path class="" d="M 260 378 H 1118" marker-end="url(#cp-overlap-arrow)" />
+<text class="annotation" x="689" y="415" >远端数据依赖不消失，改变的是交接粒度</text>
+  </svg>
+  <figcaption class="gemm-takeaway">{{ $clicks === 0 ? '上下文分片后，还要为跨片 Attention 付出通信时间' : '用分块流水争取重叠，带宽不足时仍会等待' }}</figcaption>
+</figure>
+
+::footer::
+
+<span>网络 · 多卡分工与通信</span><span>步骤 {{ Math.min($clicks, 1) + 1 }} / 2</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+本页限定长序列 Prefill 的一种 CP 组织，不声称每种 CP 都要先 AllGather 完整 KV。问题态是假设实现把接收与计算串行化，显示所需远端块没有到齐之前停算。三块仅为示意；两个状态包含相同的三次接收和三块计算，格子大小一致，只改变安排的先后关系。
+[click] 采用分块/环式 KV 交换和在线 Attention 累积，当前块计算时预取下一块；需正确保持 softmax 归一化统计和部分输出，不是直接相加各块 attention 结果。块可以按环交换；图强调时间重叠而省略环拓扑。跨块通信没有被消除，真实重叠取决于带宽、kernel 调度和资源竞争；图中格子不表示相等实测耗时或固定加速比。
+参考：https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/features/context_parallel.html
+参考：https://arxiv.org/abs/2310.01889
+-->
+
+---
+class: diagram-page
+clicks: 0
+---
+
+# EP：把不同专家放到不同卡上
+
+::left::
+
+<figure class="gemm-figure" aria-label="EP：把不同专家放到不同卡上">
+  <p class="gemm-context">换成 MoE 模型：token 按路由结果发给对应专家</p>
+  <svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs>
+<marker id="parallel-4-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible">
+<path class="arrowhead" d="M 2 2 L 10 6 L 2 10" />
+</marker>
+</defs>
+<g transform="translate(-90 0)">
+    <rect class="device" x="270" y="126" width="310" height="232" rx="3" />
+    <text class="matrix-name" x="425" y="160">GPU 0</text>
+    <rect class="device" x="770" y="126" width="310" height="232" rx="3" />
+    <text class="matrix-name" x="925" y="160">GPU 1</text>
     <text class="trace-text" x="675" y="76">token 路由</text>
-    <path class="hot-line" d="M 675 86 V 95 H 425 V 119" marker-end="url(#parallel-arrow)" />
-    <path class="" d="M 675 95 H 925 V 119" marker-end="url(#parallel-arrow)" />
+    <path class="trace-line" d="M 675 86 V 95 H 425 V 119" marker-end="url(#parallel-4-arrow)" />
+    <path class="" d="M 675 95 H 925 V 119" marker-end="url(#parallel-4-arrow)" />
     <rect class="tile-input" x="302" y="218" width="116" height="69" rx="3" />
     <text class="" x="360" y="260">专家 0</text>
     <rect class="output-tile" x="432" y="218" width="116" height="69" rx="3" />
@@ -1349,134 +2058,87 @@ clicks: 4
     <text class="" x="860" y="260">专家 2</text>
     <rect class="output-tile" x="932" y="218" width="116" height="69" rx="3" />
     <text class="" x="990" y="260">专家 3</text>
-    <text class="hot-text" x="360" y="317">热门</text>
-    <rect class="tile-input" x="304" y="182" width="28" height="21" rx="3" />
-    <rect class="tile-input" x="341" y="182" width="28" height="21" rx="3" />
-    <rect class="tile-input" x="378" y="182" width="28" height="21" rx="3" />
-    <rect class="output-tile" x="807" y="182" width="28" height="21" rx="3" />
     <text class="annotation" x="675" y="411">token 派发给专家，计算后返回结果</text>
-    </g>
-    </g>
+</g>
   </svg>
-  <figcaption class="gemm-takeaway">{{ ['主要问题：请求负载不均，权重也要重复存储', '主要问题：层内通信频繁，过细分片还会降低 GEMM 效率', '主要问题：阶段不均或任务不足，会留下流水线空闲', '主要问题：Attention 通信，以及分片后的负载均衡', '主要问题：热门专家造成负载与网络流量集中'][Math.min($clicks, 4)] }}</figcaption>
+  <figcaption class="gemm-takeaway">按需执行专家，再把结果交回原请求</figcaption>
 </figure>
 
 ::footer::
 
-<span>网络 · 多卡分工与通信</span>
-    <span>步骤 {{ Math.min($clicks, 4) + 1 }} / 5</span>
-    <span>{{ $page }} / {{ $nav.total }}</span>
+<span>网络 · 多卡分工与通信</span><span>{{ $page }} / {{ $nav.total }}</span>
 
 <!--
-本页只做五种分工的直观介绍，不推导最优并行度或混合并行配置。两个GPU框保持位置相同，每次只显示一种方式。图中的请求数、层条数、token数量与专家数仅为示意。
-DP：这里指稠密模型推理副本，每份副本处理不同请求、维护独立KV，副本之间没有训练的梯度同步。模型权重重复占用容量；请求长度、缓存亲和性会导致负载不均；增加副本主要扩展并发，不能直接缩短同一请求的计算路径。单个副本也可以由多GPU组成，但本页不展开。
-[click] TP：回指上一页Qwen MLP。图中为down投影的部分结果求和，某些其他分片布局需要AllGather或ReduceScatter，不能说所有TP算子都必须AllReduce。小消息启动成本、同步等待和较小GEMM的效率都会限制收益。
-[click] PP：用Qwen的36层举例分为1–18与19–36层。实际每段耗时不一定与层数成比例，还要安排embedding/head等。底部时序中，请求A进入GPU1时，GPU0可以同时处理请求B；初始等待块表达流水线空闲，不是实测时长。不同请求或微批可以在不同阶段交错执行，但单条请求的同一次前向仍需依次经过各段；自回归依赖和并发不足会带来空闲，不能借用训练中的“零气泡”术语断言推理没有空闲。
-[click] CP：示意长序列按token分段，KV及相关工作分到各卡，Attention仍存在跨分片依赖。双箭头泛指通信，不指定环式Attention、KV收集或局部输出归约算法。因果Attention若简单按连续区间均分，工作量也可能不均。Prefill与Decode的CP执行不同，本页只做概念介绍。Megatron语境的SP只分部分逐token算子的激活，通常与TP结合，与CP不同。
-[click] EP：明确切换为MoE模型，当前Qwen3-8B是稠密模型，本身不包含这些专家。token按路由派发到专家，计算后返回，常涉及AllToAll；路由偏斜使热门专家及相应链路成为瓶颈。示意只突出派发关系，返回动作由文字说明。
+本页明确是 MoE；前面的 Qwen3-8B 是稠密模型，不含这些专家。路由后派发与结果返回常涉及 AllToAll；简图省略返回箭头。
+参考：https://jax-ml.github.io/scaling-book/gpus/
 推理DP：https://docs.vllm.ai/en/latest/serving/data_parallel_deployment/
-TP、PP、EP：https://jax-ml.github.io/scaling-book/gpus/
-CP与SP：https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/features/context_parallel.html
-这些来源部分讨论训练，页上仅采用通用分工与通信机制，不移用训练阈值或训练同步行为。
+CP：https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/features/context_parallel.html
+EP：https://docs.vllm.ai/en/latest/serving/expert_parallel_deployment/
 -->
-
 
 ---
 class: diagram-page
-clicks: 2
+clicks: 1
 ---
 
-# 多卡协作，为什么会等待？
+# EP：热门专家会把负载集中到一张卡
 
 ::left::
 
-<figure class="gemm-figure network-figure" :data-phase="Math.min($clicks, 2)" aria-label="三个独立场景依次展示独立请求负载不均、共享链路争用，以及同一次AllReduce中的慢流导致相关计算等待。这些问题不限定于Scale-up或Scale-out。">
-  <p class="gemm-context">{{ $clicks < 2 ? 'GPU 的工作分配和通信依赖，都会影响等待' : '同一次 AllReduce，还差一条必要的数据流没有完成' }}</p>
-  <svg class="execution-drawing gemm-drawing network-drawing " viewBox="0 0 1168 510" aria-hidden="true">
+<figure class="gemm-figure" aria-label="EP：热门专家会把负载集中到一张卡">
+  <p class="gemm-context">{{ $clicks === 0 ? '问题：路由偏斜，E₀ 的 token 在同一张卡上排队' : '应对：给热门专家增加副本，再按负载分配 token' }}</p>
+  <svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
 <defs>
-      <marker id="cluster-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker>
-    </defs>
-    <g v-if="$clicks < 2">    <text class="matrix-name trace-text" x="584" y="79">{{ $clicks === 0 ? '负载不均' : '链路争用' }}</text>
-    <rect class="device" x="40" y="106" width="370" height="303" rx="4" />
-    <rect class="device" x="758" y="106" width="370" height="303" rx="4" />
-    <text class="annotation" x="225" y="137">GPU 组 A</text>
-    <text class="annotation" x="943" y="137">GPU 组 B</text>
-    <path :class="$clicks === 1 ? 'hot-line' : 'quiet-line'" d="M 318 196 H 370 V 258 H 798 V 196 H 850 M 318 340 H 370 V 258 M 798 258 V 340 H 850" />
-    <text class="annotation" x="584" y="218">共享链路</text>
-<rect :class="$clicks === 0 ? 'tile-input' : 'output-tile'" x="88" y="158" width="230" height="76" rx="3" />
-    <text class="" x="203" y="188">GPU 0</text>
-    <text class="annotation" x="203" y="219">{{ $clicks === 0 ? '长请求排队' : '发送数据' }}</text>
-    <rect :class="$clicks === 1 ? 'output-tile' : 'operation'" x="88" y="302" width="230" height="76" rx="3" />
-    <text class="" x="203" y="332">GPU 1</text>
-    <text class="annotation" x="203" y="363">{{ $clicks === 0 ? '空闲' : '发送数据' }}</text>
-    <rect :class="$clicks === 1 ? 'output-tile' : 'operation'" x="850" y="158" width="230" height="76" rx="3" />
-    <text class="" x="965" y="188">GPU 2</text>
-    <text class="annotation" x="965" y="219">{{ $clicks === 0 ? '少量请求' : '等待数据' }}</text>
-    <rect :class="$clicks === 1 ? 'output-tile' : 'operation'" x="850" y="302" width="230" height="76" rx="3" />
-    <text class="" x="965" y="332">GPU 3</text>
-    <text class="annotation" x="965" y="363">{{ $clicks === 0 ? '空闲' : '等待数据' }}</text>
-    <g v-if="$clicks === 0" class="step-arrival">
-      <rect class="tile-input" x="88" y="246" width="42" height="24" />
-    <rect class="tile-input" x="139" y="246" width="42" height="24" />
-    <rect class="tile-input" x="190" y="246" width="42" height="24" />
-    <rect class="tile-input" x="241" y="246" width="42" height="24" />
-      <text class="annotation" x="584" y="311">请求分配不均</text>
-    </g>
-    <g v-else-if="$clicks === 1" class="step-arrival">
-      <rect class="packet" x="445" y="245" width="32" height="26" />
-    <rect class="packet" x="487" y="245" width="32" height="26" />
-    <rect class="packet" x="529" y="245" width="32" height="26" />
-    <rect class="packet" x="571" y="245" width="32" height="26" />
-      <path class="hot-line" d="M 629 239 V 277 M 642 239 V 277" />
-      <path class="hot-line" d="M 659 258 H 731" marker-end="url(#cluster-arrow)" />
-      <text class="hot-text" x="584" y="311">多路传输在此排队</text>
-    </g>
-    </g>
-    <g v-else class="step-arrival">
-      <text class="annotation" x="125" y="150">GPU 0</text>
-      <text class="annotation" x="125" y="222">GPU 1</text>
-      <text class="annotation" x="125" y="294">GPU 2</text>
-      <text class="annotation" x="125" y="366">GPU 3</text>
-      <rect class="output-tile" x="250" y="121" width="280" height="42" />
-      <rect class="wait-region" x="530" y="121" width="370" height="42" />
-      <text class="trace-text" x="390" y="150">传输</text>
-      <text class="annotation" x="715" y="150">等待</text>
-      <rect class="output-tile" x="250" y="193" width="320" height="42" />
-      <rect class="wait-region" x="570" y="193" width="330" height="42" />
-      <rect class="output-tile" x="250" y="265" width="260" height="42" />
-      <rect class="wait-region" x="510" y="265" width="390" height="42" />
-      <rect class="tile-input" x="250" y="337" width="650" height="42" />
-      <text class="hot-text" x="575" y="366">慢流：排队或重传</text>
-      <path class="budget-limit" d="M 900 104 V 393" />
-      <text class="hot-text" x="900" y="83">数据到齐</text>
-      <path class="quiet-line" d="M 900 142 H 925 M 900 214 H 925 M 900 286 H 925 M 900 358 H 925" />
-      <rect class="output-tile" x="925" y="121" width="180" height="42" />
-      <rect class="output-tile" x="925" y="193" width="180" height="42" />
-      <rect class="output-tile" x="925" y="265" width="180" height="42" />
-      <rect class="output-tile" x="925" y="337" width="180" height="42" />
-      <text class="trace-text" x="1015" y="150">下一步计算</text>
-      <path d="M 250 415 H 1110" marker-end="url(#cluster-arrow)" />
-      <text class="annotation" x="1080" y="445">时间</text>
-    </g>
+<marker id="ep-hot-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible">
+<path class="arrowhead" d="M 2 2 L 10 6 L 2 10" />
+</marker>
+</defs>
+<text class="matrix-name" x="584" y="86" >同一个热门专家 E₀，收到很多 token</text>
+<rect class="device" x="70" y="130" width="405" height="240" rx="3" />
+<text class="matrix-name" x="272" y="169" >GPU 0</text>
+<rect class="device" x="695" y="130" width="405" height="240" rx="3" />
+<text class="matrix-name" x="897" y="169" >GPU 1</text>
+<rect class="tile-input" x="122" y="264" width="300" height="64" rx="3" />
+<text class="" x="272" y="305" >专家 E₀</text>
+<g v-if="$clicks === 0" class="step-arrival">
+<rect class="output-tile" x="747" y="264" width="300" height="64" rx="3" />
+<text class="" x="897" y="305" >其他专家</text>
+<text class="annotation" x="897" y="227" >负载较轻</text>
+</g>
+<g v-else class="step-arrival">
+<rect class="tile-input" x="747" y="264" width="300" height="64" rx="3" />
+<text class="" x="897" y="305" >E₀ 的额外副本</text>
+</g>
+<g v-if="$clicks === 0" class="step-arrival">
+<rect class="tile-input" x="122" y="204" width="38" height="37" rx="3" />
+<rect class="tile-input" x="170" y="204" width="38" height="37" rx="3" />
+<rect class="tile-input" x="218" y="204" width="38" height="37" rx="3" />
+<rect class="tile-input" x="266" y="204" width="38" height="37" rx="3" />
+<rect class="tile-input" x="314" y="204" width="38" height="37" rx="3" />
+<rect class="tile-input" x="362" y="204" width="38" height="37" rx="3" />
+</g>
+<g v-else class="step-arrival">
+<rect class="tile-input" x="122" y="204" width="38" height="37" rx="3" />
+<rect class="tile-input" x="170" y="204" width="38" height="37" rx="3" />
+<rect class="tile-input" x="218" y="204" width="38" height="37" rx="3" />
+<rect class="tile-input" x="747" y="204" width="38" height="37" rx="3" />
+<rect class="tile-input" x="795" y="204" width="38" height="37" rx="3" />
+<rect class="tile-input" x="843" y="204" width="38" height="37" rx="3" />
+</g>
+<text class="annotation" x="584" y="420" >{{ $clicks === 0 ? '热点集中在 E₀；增加其他专家的空闲算力也无济于事' : '仍然计算 E₀，只把任务分给它的不同副本；多占一份权重' }}</text>
   </svg>
-  <figcaption class="gemm-takeaway">{{ $clicks === 0 ? '请求数相同，也不一定有相同的工作量' : $clicks === 1 ? '多路数据共用链路，传输会相互争抢带宽' : '慢流尚未完成，依赖完整结果的计算就要等待' }}</figcaption>
+  <figcaption class="gemm-takeaway">{{ $clicks === 0 ? '整批的完成时间可能被少数热门专家拖长' : '用额外显存换取更均衡的专家负载' }}</figcaption>
 </figure>
 
 ::footer::
 
-<span>网络 · 多卡分工与通信</span><span>步骤 {{ Math.min($clicks, 2) + 1 }} / 3</span><span>{{ $page }} / {{ $nav.total }}</span>
+<span>网络 · 多卡分工与通信</span><span>步骤 {{ Math.min($clicks, 1) + 1 }} / 2</span><span>{{ $page }} / {{ $nav.total }}</span>
 
 <!--
-上一页讲分工，本页讲多卡协作的通用代价，再由下一页介绍互连范围。这三个场景独立，不表示一次执行连续发生的三个阶段，也不将它们限定为Scale-out网络才有的问题。
-初始：独立请求分配给不同推理副本，长短输入、输出长度和缓存亲和性都可能造成工作量不均。这是请求调度或计算负载问题，独立副本不需要共同完成一次AllReduce。两组GPU框只用于安排图面，不定义物理服务器或互连域。
-[click] 多条数据流竞争共享链路，总需求超出可用带宽时产生排队。连线不指定PCIe、NVLink、网卡或实际拓扑；此类争用可能出现在不同互连范围中。
-[click] 换为同一次AllReduce。各行抽象参与GPU的通信与依赖等待，一条必要的数据流因排队、链路异常或重传延后，使相关归约结果延后。实际AllReduce包含多个阶段，流与GPU不严格一一对应，也不要求所有rank同一时刻返回。共同完成线只突出依赖关系，不表示额外的全局barrier；无关计算仍可能与通信重叠。重传适用于存在该恢复机制的传输路径，并非所有互连行为都相同。
-GPU框、队列数量与时间条长度均为定性示意，不编码实测吞吐、时延或性能比例。
-负载分配：https://docs.vllm.ai/en/latest/serving/data_parallel_deployment/
-节点内与跨节点集合通信：https://jax-ml.github.io/scaling-book/gpus/
-网络排队、重传与尾延迟：https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/networking_troubleshooting.html
+本页为 MoE 部署示意，突出单个热门专家，不代表全部专家和全部显存布局。token 方块数用于比较负载，不是测量。
+[click] 保持模型选择的专家身份 E₀，额外复制 E₀ 权重到有空间的设备，再将发往 E₀ 的 token 分派到其不同副本；不是把任务改派给语义不同的专家。原有专家仍需存在，简图省略。新增权重、负载统计、权重搬运和重平衡都有成本；容量紧张时未必适合，也不能消除 AllToAll 的网络代价。
+参考：https://docs.vllm.ai/en/latest/serving/expert_parallel_deployment/ （Expert Parallel Load Balancer 与 Memory Footprint Overhead）
 -->
-
 
 ---
 class: diagram-page
@@ -1540,44 +2202,81 @@ clicks: 0
 以常见NVIDIA系统为背景，Scale-up可由NVLink/NVSwitch承担，Scale-out可通过网卡和InfiniBand或以太网交换网络连接不同高速域。图中省略PCIe与交换机层级，不给定带宽，也不将某一种协议作为所有系统的必要条件。
 DP、TP、PP、CP、EP描述计算分工，Scale-up/Scale-out描述本页采用的互连范围；实际放置可以使同一种并行方式留在域内，也可以跨域。不能将TP严格等同于Scale-up、DP或P/D严格等同于Scale-out。下一页选用跨超节点的P/D部署作为具体案例。
 GPU网络层级与NVL72互连域：https://jax-ml.github.io/scaling-book/gpus/
--->
 
+有一个scale-up和scale-out网络带宽的对比
+-->
 
 ---
 class: diagram-page
-clicks: 1
+clicks: 2
 ---
 
 # P/D 分离：把输入处理与持续生成分开
 
 ::left::
 
-<figure class="gemm-figure network-figure" :data-phase="Math.min($clicks, 1)" aria-label="先展示共享GPU时Prefill对持续生成的干扰，再选择跨超节点部署：超节点A的P池产生KV，经Scale-out网络交接给超节点B的D池。P/D分离不必然跨超节点，这里只展示一种明确的部署选择。">
-  <p class="gemm-context">{{ $clicks === 0 ? '请求 A 正在输出，此时又来了一个长请求 B' : '部署示例：P 池与 D 池分别位于两个超节点' }}</p>
+<figure class="gemm-figure network-figure" :data-phase="Math.min($clicks, 2)" aria-label="Prefill通常Compute Bound，低批量Decode通常Memory Bound，这里的Memory指显存带宽。先展示共享GPU时Prefill对持续生成的干扰，再选择跨超节点部署：P池侧重计算吞吐，D池侧重显存带宽与时延，KV经Scale-out网络交接。P/D分离不必然跨超节点。">
+  <p class="gemm-context">{{ ['回到一次请求：先处理已知输入，再逐 token 生成', '请求 A 正在输出，此时又来了一个长请求 B', '部署示例：P 池与 D 池分别位于两个超节点'][Math.min($clicks, 2)] }}</p>
   <svg class="execution-drawing gemm-drawing network-drawing " viewBox="0 0 1168 510" aria-hidden="true">
 <defs>
-      <marker id="pd-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker>
+      <marker id="pd-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible">
+<path class="arrowhead" d="M 2 2 L 10 6 L 2 10" />
+</marker>
     </defs>
-    <g v-if="$clicks === 0" class="step-arrival">
+<g v-if="$clicks === 0" class="step-arrival">
+<rect class="device" x="40" y="95" width="475" height="313" rx="3" />
+<rect class="device" x="653" y="95" width="475" height="313" rx="3" />
+<text class="matrix-name" x="277" y="139" >Prefilling</text>
+<text class="matrix-name" x="890" y="139" >Decoding</text>
+<rect class="tile-input" x="81" y="174" width="65" height="50" rx="3" />
+<text class="" x="113" y="208" >把</text>
+<rect class="tile-input" x="159" y="174" width="65" height="50" rx="3" />
+<text class="" x="191" y="208" >球</text>
+<rect class="tile-input" x="237" y="174" width="65" height="50" rx="3" />
+<text class="" x="269" y="208" >放</text>
+<rect class="tile-input" x="315" y="174" width="65" height="50" rx="3" />
+<text class="" x="347" y="208" >入</text>
+<rect class="tile-input" x="393" y="174" width="65" height="50" rx="3" />
+<text class="" x="425" y="208" >碗</text>
+<text class="" x="277" y="268" >一次处理已知输入，建立 KV</text>
+<text class="memory-text" x="277" y="322" font-weight="700">通常 Compute Bound</text>
+<text class="annotation" x="277" y="370" >关注首 token 时延</text>
+<rect class="output-tile" x="692" y="174" width="83" height="50" rx="3" />
+<text class="" x="733" y="208" >好</text>
+<path class="trace-line" d="M 783 199 H 826" marker-end="url(#pd-arrow)" />
+<rect class="output-tile" x="834" y="174" width="83" height="50" rx="3" />
+<text class="" x="875" y="208" >的</text>
+<path class="trace-line" d="M 925 199 H 968" marker-end="url(#pd-arrow)" />
+<rect class="output-tile" x="976" y="174" width="83" height="50" rx="3" />
+<text class="" x="1017" y="208" >。</text>
+<text class="" x="890" y="268" >每轮生成一个 token，读取并追加 KV</text>
+<text class="trace-text" x="890" y="322" font-weight="700">通常 Memory Bound</text>
+<text class="annotation" x="890" y="370" >关注相邻 token 的间隔</text>
+<path class="trace-line" d="M 523 230 H 645" marker-end="url(#pd-arrow)" />
+<text class="annotation" x="584" y="203" >KV</text>
+</g>
+    <g v-else-if="$clicks === 1" class="step-arrival">
       <rect class="device" x="83" y="87" width="1002" height="314" rx="4" />
       <text class="matrix-name" x="584" y="127">共用一组 GPU</text>
-      <text class="annotation" x="165" y="212">请求 A</text>
-    <text class="annotation" x="165" y="304">请求 B</text>
-      <rect class="output-tile" x="247" y="180" width="94" height="47" />
-    <text class="trace-text" x="294" y="212">生成</text>
-      <rect class="output-tile" x="353" y="180" width="94" height="47" />
-    <text class="trace-text" x="400" y="212">生成</text>
-      <rect class="wait-region" x="460" y="180" width="310" height="47" />
-    <text class="annotation" x="615" y="212">输出间隔变长</text>
-      <rect class="output-tile" x="783" y="180" width="94" height="47" />
-    <text class="trace-text" x="830" y="212">生成</text>
-      <rect class="output-tile" x="889" y="180" width="94" height="47" />
-    <text class="trace-text" x="936" y="212">生成</text>
-      <rect class="tile-input" x="460" y="272" width="310" height="47" />
-    <text class="memory-text" x="615" y="304">长请求的 Prefill</text>
-      <path class="memory-line" d="M 460 237 V 263 M 770 237 V 263" />
-      <path d="M 247 366 H 987" marker-end="url(#pd-arrow)" />
-    <text class="annotation" x="617" y="394">执行顺序示意</text>
+      <text class="left-label trace-text" x="110" y="190">A · Decode</text>
+      <text class="left-label trace-text compact-label" font-weight="700" x="110" y="225">通常 Memory Bound</text>
+      <text class="left-label memory-text" x="110" y="282">B · Prefill</text>
+      <text class="left-label memory-text" font-weight="700" x="110" y="317">通常 Compute Bound</text>
+      <rect class="output-tile" x="350" y="180" width="80" height="47" />
+      <text class="trace-text" x="390" y="212">生成</text>
+      <rect class="output-tile" x="442" y="180" width="80" height="47" />
+      <text class="trace-text" x="482" y="212">生成</text>
+      <rect class="wait-region" x="534" y="180" width="260" height="47" />
+      <text class="annotation" x="664" y="212">输出间隔变长</text>
+      <rect class="output-tile" x="806" y="180" width="80" height="47" />
+      <text class="trace-text" x="846" y="212">生成</text>
+      <rect class="output-tile" x="898" y="180" width="80" height="47" />
+      <text class="trace-text" x="938" y="212">生成</text>
+      <rect class="tile-input" x="534" y="272" width="260" height="47" />
+      <text class="memory-text" x="664" y="304">长请求的 Prefill</text>
+      <path class="memory-line" d="M 534 237 V 263 M 794 237 V 263" />
+      <path d="M 350 366 H 985" marker-end="url(#pd-arrow)" />
+      <text class="annotation" x="667" y="394">执行顺序示意</text>
     </g>
     <g v-else class="step-arrival">
       <rect class="device" x="90" y="89" width="355" height="277" rx="4" />
@@ -1597,28 +2296,34 @@ clicks: 1
       <path class="trace-line" d="M 408 296 H 753" marker-end="url(#pd-arrow)" />
       <text class="trace-text" x="584" y="266">Scale-out</text>
       <text class="annotation" x="584" y="339">KV 交接</text>
-      <text class="annotation" x="267" y="410">单独安排输入处理</text>
-      <text class="annotation" x="900" y="410">持续服务生成请求</text>
+      <text class="memory-text" font-weight="700" x="267" y="395">通常 Compute Bound</text>
+      <text class="trace-text compact-label" font-weight="700" x="900" y="395">通常 Memory Bound</text>
+      <text class="annotation" x="267" y="430">侧重计算吞吐</text>
+      <text class="annotation" x="900" y="430">侧重显存带宽与时延</text>
     </g>
   </svg>
-  <figcaption class="gemm-takeaway">{{ $clicks === 0 ? '长请求的 Prefill，可能影响其他请求持续输出' : '减少阶段干扰，也增加跨超节点的 KV 交接' }}</figcaption>
+  <figcaption class="gemm-takeaway">{{ ['Prefill 关注计算能力，低批量 Decode 重显存带宽与输出时延', '资源需求不同，混跑还可能拉长输出间隔', '按阶段优化资源配置，代价是增加 KV 交接'][Math.min($clicks, 2)] }}</figcaption>
 </figure>
 
 ::footer::
 
-<span>网络 · 多卡分工与通信</span><span>步骤 {{ Math.min($clicks, 1) + 1 }} / 2</span><span>{{ $page }} / {{ $nav.total }}</span>
+<span>网络 · 多卡分工与通信</span><span>步骤 {{ Math.min($clicks, 2) + 1 }} / 3</span><span>{{ $page }} / {{ $nav.total }}</span>
 
 <!--
 上一页建立互连范围，本页把P/D分离放到一个明确的物理部署中。P/D分离是按推理阶段安排不同服务资源，本身并不要求跨超节点，也不等同于一种网络。
-初始：示意某种混合调度中，新来的长请求B执行Prefill，使A的下一次生成延后。这是可能的资源竞争或调度现象，chunked prefill等方法也可缓解干扰。时间块仅表达执行顺序，不表示实测时长或加速比。
+先承接前面的Roofline：较长输入的Prefill一次处理多个token，权重能在较大的矩阵计算中复用，通常偏Compute Bound；低批量Decode每轮每个请求只生成一个token，常受读取权重与KV的显存带宽限制，通常偏Memory Bound。这里Memory Bound指带宽瓶颈，不是显存容量放不下。两阶段的瓶颈不是绝对不变：增大Decode批量会提高权重复用，可能转向计算受限；模型、上下文长度、精度和硬件也会改变瓶颈。
+初始：回顾 Prefilling 处理已知输入，生成各层 KV 并通常产出首 token；Decoding 每轮处理前一 token 的输入并生成下一 token，持续读取与追加 KV。图中文句只是 token 示意，不对应实际分词。长输入 Prefill 更容易复用权重；低批量 Decode 往往受显存带宽约束。
+[click] 示意某种混合调度中，新来的长请求B执行Prefill，使A的下一次生成延后。这是可能的资源竞争或调度现象，chunked prefill等方法也可缓解干扰。时间块仅表达执行顺序，不表示实测时长或加速比。
 [click] 本例特意选择两个超节点：P池部署在A，D池部署在B，KV交接经过二者之间的Scale-out网络。各池可以在内部采用上一节介绍的并行分工；两侧都需要能运行完整模型的权重，可各自分片，不是P负责模型前半层、D负责后半层。单次请求的P产生各层KV，D接收后持续生成，新增KV通常在D侧维护，不会在每个token时往返传全量缓存。图中省略请求元数据、采样状态及传输实现。
 P/D也可以放在同一高速互连域内的不同GPU。DistServe在跨机带宽受限时，将对应层段的P/D实例放在同一节点，通过NVLink交接KV。因此是否经过Scale-out由物理放置决定。
-P/D可分别安排批大小和资源，但两池处理能力仍需匹配，并会新增KV传输和排队代价；不能据此保证所有工作负载吞吐提升。下一页扩展P池节点数量，始终追踪KV交接中的网络瓶颈，不跳回AllReduce。
+性质不同意味着两阶段不必使用相同的资源分配、批大小与并行策略：P池重点优化计算吞吐及首token时延，D池重点优化显存带宽利用和持续生成的单token时延。分离后可独立调整各池的资源与并行方式，并减少阶段间调度干扰；不是把P的计算单元和D的显存物理拆开，两池仍都需要算力和显存。
+两池处理能力仍需匹配，并会新增KV传输和排队代价；不能据此保证所有工作负载吞吐提升。下一页扩展P池节点数量，始终追踪KV交接中的网络瓶颈，不跳回AllReduce。
 P/D原理：https://jax-ml.github.io/scaling-book/inference/
 DistServe及节点内放置（§4.2）：https://www.usenix.org/system/files/osdi24-zhong-yinmin.pdf
 实现说明：https://docs.vllm.ai/en/latest/features/disagg_prefill/
--->
 
+Callback一下 Prefiling 和 Decoding
+-->
 
 ---
 class: diagram-page
@@ -2146,5 +2851,189 @@ CXL 3.0白皮书：https://computeexpresslink.org/wp-content/uploads/2023/12/CXL
 CXL in Cloud Practice：https://pages.cs.wisc.edu/~markhill/papers/ieeetoc2026_cxl_practice.pdf
 
 -->
+---
+class: chapter-page
+clicks: 0
+---
 
+# 端侧 VLA · 从部署到优化
 
+<!--
+讲完计算、网络和存储，最后回到端侧 VLA。先看公开延迟记录和 Thor 优化目标，再用 UMA 与 Persistent MegaKernel 两个示意说明工作方向。公开结果与我们的目标分开呈现。
+-->
+
+---
+class: diagram-page
+clicks: 0
+---
+
+# VLA 优化目标
+
+::left::
+
+<figure class="gemm-figure" aria-label="π0.5 在三视角输入下的公开延迟记录，以及 Thor 的 BF16 与 FP8 优化目标">
+<p class="gemm-context">π₀.₅ · 3-view · batch 1</p>
+<svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<text class="left-label annotation" x="25" y="98">设备 / 实现</text>
+<text x="480" y="72">实验配置</text>
+<text x="365" y="108">View</text>
+<text x="480" y="108">H</text>
+<text x="600" y="108">去噪步数</text>
+<text class="annotation" x="735" y="98">公开延迟</text>
+<path class="rule-line" d="M 20 126 H 810" />
+<path class="rule-line" d="M 840 72 V 435" />
+<text class="left-label" x="25" y="184">RTX 4090 · BF16</text>
+<text class="left-label" x="25" y="216">FlashVLA 基线</text>
+<text x="365" y="200">3</text>
+<text x="480" y="200">50</text>
+<text x="600" y="200">10</text>
+<text x="735" y="200" font-weight="700">55.4 ms</text>
+<path class="rule-line" d="M 20 250 H 810" />
+<text class="left-label" x="25" y="284">Thor · BF16</text>
+<text class="left-label" x="25" y="316">PhyAI</text>
+<text x="365" y="300">3</text>
+<text x="480" y="300">50</text>
+<text x="600" y="300">10</text>
+<text x="735" y="300" font-weight="700">约 135 ms</text>
+<path class="rule-line" d="M 20 350 H 810" />
+<text class="left-label" x="25" y="384">Thor · FP8</text>
+<text class="left-label" x="25" y="416">FlashRT</text>
+<text x="365" y="400">3</text>
+<text x="480" y="400">10</text>
+<text x="600" y="400">10</text>
+<text x="735" y="400" font-weight="700">49.02 ms</text>
+<text class="matrix-name trace-text" x="1000" y="98">Thor 优化目标</text>
+<rect class="tile-input" x="877" y="140" width="245" height="112" rx="3" />
+<text x="1000" y="180">BF16</text>
+<text class="trace-text" x="1000" y="223" font-weight="700">约 70 ms</text>
+<rect class="output-tile" x="877" y="306" width="245" height="112" rx="3" />
+<text x="1000" y="346">FP8</text>
+<text class="trace-text" x="1000" y="389" font-weight="700">30 ms 量级</text>
+</svg>
+</figure>
+
+::footer::
+
+<span>端侧 VLA · 优化目标</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+2026-10-29 按 3-view 重新核对。本页只保留相机视角数有明确依据的 π0.5 记录，batch 均为 1，去噪均为 10 步。View 指输入相机视角数，H 指每次生成的动作序列长度，不是执行动作数。三行属于不同实现和计时范围，且 FP8 的 H=10、BF16 的 H=50；不据此计算跨行加速比，也不称为我们的实测。
+
+RTX 4090 BF16 55.4 ms：FlashVLA README 的 Latency Benchmark，取“π0.5”基线行的 3-view 列，不是“+ FlashVLA”行。基线已使用 CUDA Graph 和 kernel fusion，不是原生 OpenPi eager。100 次调用均值，预热 10 次。latency_baseline.yaml 指定 BF16、compile、fuse_qkv / fuse_gate_up；PI05Config 的 chunk_size=50、num_inference_steps=10。脚本先准备 batch，再以 perf_counter 配合 CUDA synchronize 测 predict_action_chunk，排除外部 batch 预处理。脚本对 3 路真实相机额外保留一个 empty camera slot；View 列不计算补齐槽位。
+https://github.com/z-lab/flashvla#latency-benchmark
+https://github.com/z-lab/flashvla/blob/main/benchmarks/configs/latency_baseline.yaml
+https://github.com/z-lab/flashvla/blob/main/flashvla/policies/pi05/configuration_pi05.py
+https://github.com/z-lab/flashvla/blob/main/benchmarks/benchmark_latency.py
+
+Thor BF16 约 135 ms：PhyAI 论文第 5.3 节 Figure 5 的 batch=1 点，明确为 BF16、3 cameras、50 actions、10 Euler steps、CUDA Graphs，预热 10 次后测 50 次。正文给出 Thor 单请求吞吐 7.43 samples/s，因此换算平均单次延迟为 1000 / 7.43 = 134.59 ms，页内取整为“约 135 ms”。这是由公开吞吐换算的 PhyAI runner 延迟，不是直接公布的精确毫秒值，也不是 OpenPi 原生基线。计时排除采集、传输、排队和执行器交接。不要混用论文 Table 5 的 107.699 ms：那属于另一组 single-request 比较，不能自动套用 Figure 5 的配置。
+https://arxiv.org/html/2608.03682v1#S5.SS3
+https://github.com/mingti-org/phyai/blob/main/benchmark/pi05/profile_pi05.py
+
+Thor FP8 49.02 ms：FlashRT 的 Pi0.5 Thor NVFP4 End-to-End Results，“Current Result (2026-08-05)”表的 3-view / Same-run FP8 p50 列。取 FP8 对照，不是 NVFP4 结果。Torch frontend 生产配置 Sa=10、steps=10；使用 FP8 投影及 FP16 中间路径、FA4、CUDA Graph，非所有张量均为 FP8。MAXN、固定 GPC/NVD 时钟，20 次预热、100 次完整 infer()；包含图像预处理和上传、模型、同步、动作下载与后处理。这是文档保留的一次具体 session；作者说明 Thor FP8 延迟会随设备状态变动，并建议复现时使用约 300 次预热，不能把该值当作稳定保证。另一次 public API 验证为 45.75 ms，不能与其他 session 混算加速比。同表 31.74 ms 属于 NVFP4 + FA4，不能写成 FP8 已达到 30 ms。
+https://github.com/flashrt-project/FlashRT/blob/main/docs/pi05_thor_decoder_fp4_e2e.md#current-result-2026-08-05
+https://github.com/flashrt-project/FlashRT/blob/main/flash_rt/frontends/torch/pi05_thor.py
+
+移除旧版的 2-view 数据：NVIDIA OpenPi compile BF16 132 ms，以及 APXInf Thor BF16 72.45 / FP8 41.16 ms，均为两路输入、H=10、10 步；不能直接改成 3-view。PI 论文的 RTX 4090 76 ms 没有披露对应的视角数，也移出本页。此次未找到配置完整、可核验的 OpenPi 或 APXInf 3-view Thor BF16 记录，因此改用明确署名的 PhyAI 记录。
+https://www.jetson-ai-lab.com/tutorials/openpi_on_thor/#performance
+https://github.com/RLinf/APXinf-robo#performance
+
+右侧 BF16 约 70 ms、FP8 30 ms 量级仍是用户提出的 Thor 优化目标。后续在同一模型、3-view、动作 H、语言长度、去噪步数、计时范围和设备功耗模式下建立我们的实测，再比较优化收益与动作质量。
+-->
+
+---
+class: diagram-page
+clicks: 1
+---
+
+# 端侧 VLA：共享内存与常驻执行
+
+::left::
+
+<figure class="gemm-figure" aria-label="端侧 VLA 的 UMA 共享缓冲和 Persistent MegaKernel 执行示意">
+<p class="gemm-context">{{ $clicks === 0 ? 'UMA：CPU 与 GPU 直接复用观察和动作缓冲' : '多卡示例：MatMul 分块就绪后，AllGather 即可开始' }}</p>
+<svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs><marker id="vla-plan-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker></defs>
+<g v-if="$clicks === 0" class="step-arrival">
+<rect class="device" x="140" y="100" width="300" height="86" rx="3" />
+<text class="matrix-name" x="290" y="136">CPU</text>
+<text class="annotation" x="290" y="169">准备观察 · 读取动作</text>
+<rect class="device" x="730" y="100" width="300" height="86" rx="3" />
+<text class="matrix-name" x="880" y="136">GPU</text>
+<text class="annotation" x="880" y="169">执行模型 · 生成动作</text>
+<rect class="device" x="105" y="275" width="958" height="132" rx="3" />
+<text class="matrix-name" x="584" y="306">Thor：CPU 与 GPU 共用物理 DRAM</text>
+<rect class="output-tile" x="140" y="329" width="415" height="54" rx="3" />
+<text x="347" y="365">共享的观察 / 动作缓冲</text>
+<rect class="tile-input" x="610" y="329" width="415" height="54" rx="3" />
+<text x="817" y="365">权重与中间张量</text>
+<path class="trace-line" d="M 290 194 V 267" marker-start="url(#vla-plan-arrow)" marker-end="url(#vla-plan-arrow)" />
+<path class="trace-line" d="M 880 194 V 267" marker-start="url(#vla-plan-arrow)" marker-end="url(#vla-plan-arrow)" />
+</g>
+<g v-else class="step-arrival">
+<text class="left-label matrix-name" x="25" y="81">Kernel-per-Operator</text>
+<text class="annotation" x="528" y="81">整算子屏障</text>
+<rect class="tile-input" x="160" y="104" width="350" height="36" rx="3" />
+<text x="335" y="131">MatMul Kernel</text>
+<rect class="output-tile" x="554" y="104" width="276" height="36" rx="3" />
+<text x="692" y="131">AllGather Kernel</text>
+<path class="budget-limit" d="M 528 98 V 242" />
+<text x="75" y="177">SM 0</text>
+<rect class="tile-input" x="160" y="151" width="180" height="36" rx="3" />
+<text x="250" y="178">MatMul</text>
+<rect class="wait-region" x="350" y="151" width="170" height="36" rx="3" />
+<text x="435" y="178">等待</text>
+<rect class="output-tile" x="554" y="151" width="160" height="36" rx="3" />
+<text x="634" y="178">AllGather</text>
+<text x="75" y="230">SM 1</text>
+<rect class="tile-input" x="160" y="204" width="350" height="36" rx="3" />
+<text x="335" y="231">MatMul</text>
+<rect class="output-tile" x="554" y="204" width="240" height="36" rx="3" />
+<text x="674" y="231">AllGather</text>
+<path class="rule-line" d="M 25 261 H 840" />
+<text class="left-label matrix-name" x="25" y="292">Persistent MegaKernel</text>
+<rect class="device" x="145" y="307" width="695" height="135" rx="3" />
+<text x="335" y="334">常驻 workers</text>
+<text class="trace-text" x="692" y="334">一次启动</text>
+<text x="75" y="374">SM 0</text>
+<rect class="tile-input" x="160" y="347" width="180" height="36" rx="3" />
+<text x="250" y="374">MatMul</text>
+<rect class="output-tile" x="374" y="347" width="160" height="36" rx="3" />
+<text x="454" y="374">AllGather</text>
+<path class="trace-line" d="M 348 365 H 366" marker-end="url(#vla-plan-arrow)" />
+<text x="75" y="427">SM 1</text>
+<rect class="tile-input" x="160" y="400" width="350" height="36" rx="3" />
+<text x="335" y="427">MatMul</text>
+<rect class="output-tile" x="544" y="400" width="240" height="36" rx="3" />
+<text x="664" y="427">AllGather</text>
+<path class="trace-line" d="M 518 418 H 536" marker-end="url(#vla-plan-arrow)" />
+<path class="rule-line" d="M 862 80 V 441" />
+<text class="left-label trace-text matrix-name" x="889" y="123" font-weight="700">跨算子流水</text>
+<text class="left-label" x="889" y="158">预取与计算交叠</text>
+<text class="left-label trace-text matrix-name" x="889" y="245" font-weight="700">多卡计算通信重叠</text>
+<text class="left-label" x="889" y="280">分块就绪后即可传输</text>
+<text class="left-label trace-text matrix-name" x="889" y="367" font-weight="700">支持动态负载</text>
+<text class="left-label" x="889" y="402">按依赖派发就绪任务</text>
+</g>
+</svg>
+<figcaption class="gemm-takeaway">{{ $clicks === 0 ? '让输入、输出共用一份缓冲，减少 CPU ↔ GPU 复制' : '一边计算剩余分块，一边通信已就绪分块' }}</figcaption>
+</figure>
+
+::footer::
+
+<span>端侧 VLA · 优化方向</span><span>步骤 {{ Math.min($clicks, 1) + 1 }} / 2</span><span>{{ $page }} / {{ $nav.total }}</span>
+
+<!--
+删除原先的算子优化独立状态。本页只保留UMA与Persistent MegaKernel两个状态，服务于端侧优化方向的讲解，不是已完成实现或分项收益测量。
+初始：UMA表示CPU/GPU共享物理DRAM。图中的观察/动作缓冲采用可共享的映射、注册或互操作分配，由CPU准备输入/读取输出，GPU运行模型；这里要优化的是这段I/O路径的重复复制和分配。不同分配方式的缓存、缺页与映射行为不同；UMA不等于cudaMallocManaged，也不意味着任意device pointer可由CPU解引用。必要的程序同步仍存在，不保证任意负载的共享访问都快于显式复制。这些条件保留在备注，不占用图面。
+UMA依据：https://docs.nvidia.com/cuda/cuda-for-tegra-appnote/
+[click] 参考用户提供的《261016-刘谦-MPK.pdf》物理第3–8页（页内2/22–7/22）和第21–23页（19/22–21/22）。主图保留这份材料的SM时间线与Kernel边界表达，采用材料中的MatMul→AllGather多卡通信例子。横轴向右表示执行先后，条长是定性示意，不是实测耗时或加速比。上下两组工作量与颜色一致：暖色为MatMul计算任务，蓝色为AllGather通信任务。
+传统Kernel-per-Operator：每个算子分别提交kernel；在同一CUDA stream、未使用PDL等细粒度重叠机制的常见执行路径中，后继kernel要等前一kernel整体结束。图中SM0先完成自己负责的MatMul分块，但后续AllGather仍被整算子边界挡住，直到SM1的MatMul工作也完成才开始通信。此处的等待是设备执行边界，不表示CPU每次同步等待；不同kernel的线程块也未必映射到同一个SM。本图只选取两条代表性SM轨迹，省略其他调度细节。
+Persistent MegaKernel：把多个算子分解为SM级任务，由一次启动的常驻worker线程块执行。worker完成任务后发布事件；设备内调度器根据依赖派发后续任务，worker继续取任务。图中SM0的MatMul输出分块及其相关通信依赖就绪后，即可执行对应AllGather任务，与SM1剩余的MatMul重叠；AllGather还需遵守相关GPU间的就绪与数据可见性协议。不需要等无关分块全部结束；若后继任务确实需要多个分块，则仍须等待所有必要依赖。图示省略scheduler占用与事件队列，不能理解成移除了所有同步。
+减少启动：原本多个算子kernel的启动变成一次persistent kernel启动，任务交接留在GPU。CUDA Graph也能减少主机提交开销，但包含多个kernel的Graph重放仍保留kernel边界；因此MPK的收益不限于少launch。
+跨算子流水：材料第5、23页强调，当前任务的Tensor Core/CUDA Core计算与下一任务的数据预取可以交叠；分页管理SMEM使释放的page更早供下一任务使用。这样减少kernel边界处pipeline drain/refill造成的气泡，更充分地利用TMA、Tensor Cores、CUDA Cores。可复用的数据有机会保留在片上，但并非所有中间张量都免去全局内存读写。主图展示跨算子并发，右侧概括其进一步的资源流水收益。
+多卡计算通信重叠：材料第6、8页以MatMul→AllGather说明，依赖从整个张量缩小到分块；某块输出就绪后可以先通信，同时其他SM继续算剩余分块。这里是多卡推理的扩展收益，不宣称单卡Thor的VLA路径存在AllGather，也不等同于UMA下的主机输入复制。
+支持动态负载：材料第21–22页区分JIT/AOT任务派发。MPK运行时可按事件就绪状态动态调度，用就绪任务填补空闲，服务不同shape、请求组合或分支。并非任意形状都自动支持，也不是所有负载都必须动态派发；AOT/混合策略可降低调度开销。动态控制不必完全依赖修改或重新实例化静态CUDA Graph。
+对VLA的意义：动作专家中有重复的多层/多步小任务，适合评估launch、kernel边界、预取和资源空闲的占比，然后选择可用子图进行persistent化。这里展示机制和潜在收益，不是VLA已经实现的加速，也不保证达到70/30ms。设备内依赖管理、worker驻留、SMEM分配与调度本身仍有成本。
+用户材料：/Users/ptiris/Documents/Sharing/0930/261016-刘谦-MPK.pdf
+机制参考：MPK: A Compiler and Runtime for Mega-Kernelizing Tensor Programs。https://arxiv.org/html/2512.22219v2
+-->

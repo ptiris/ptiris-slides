@@ -505,6 +505,7 @@
 .network-drawing .wait-region { fill: #f3f5f7; stroke: #bdc5d0; stroke-width: 1.4px; stroke-dasharray: 5 4; }
 
 .network-drawing .compact-label { font-size: 23px; }
+.network-drawing .schedule-shift { transition: transform 550ms ease; }
 
 /* Internal fabric is distinct from the shared scale-out paths. */
 .scaleout-drawing .fabric-line { stroke: var(--deck-accent-border); stroke-width: 3px; }
@@ -521,9 +522,20 @@
 .outline-page .lecture-columns { margin-top: 0; }
 .outline-map { display: flex; align-items: center; height: 510px; }
 .lecture-slide .outline-rows { width: 100%; list-style: none; padding: 0; margin: 0; }
-.outline-rows li { position: relative; display: grid; grid-template-columns: 315px minmax(0, 1fr); align-items: center; min-height: 105px; margin: 0; padding-left: 34px; border-bottom: 1px solid var(--deck-line); }
-.outline-rows li::before { content: ''; position: absolute; left: 0; top: 48px; width: 8px; height: 8px; border: 1.5px solid var(--deck-accent-border); background: var(--deck-accent-light); }
+.outline-rows li { position: relative; display: grid; grid-template-columns: 315px minmax(0, 1fr); align-items: center; min-height: 96px; margin: 0; padding-left: 34px; border-bottom: 1px solid var(--deck-line); }
+.outline-rows li::before { content: ''; position: absolute; left: 0; top: calc(50% - 4px); width: 8px; height: 8px; border: 1.5px solid var(--deck-accent-border); background: var(--deck-accent-light); }
 .outline-rows li:last-child { border-bottom: 0; }
 .outline-topic { color: var(--deck-accent); font-size: 30px; font-weight: 500; }
 .outline-description { font-size: 28px; }
 .outline-page .lecture-footer, .outline-page .lecture-footer > p { justify-content: flex-end; }
+
+/* Track a pair of K tiles while keeping the output tile fixed. */
+.tiled-memory .tile-strip { fill: var(--deck-warm-light); opacity: .65; }
+.tiled-memory .tile-motion { transition: transform 450ms ease; }
+.tiled-memory .tile-symbol { font-size: 22px; }
+.tiled-memory .register-stage { fill: var(--deck-paper); stroke: var(--deck-line); stroke-width: 1.5px; }
+.tiled-memory .register-stage.has-sum { fill: var(--deck-accent-light); stroke: var(--deck-accent-border); }
+.tiled-memory .tile-read, .tiled-memory .tile-compute { stroke: var(--deck-line); }
+.tiled-memory[data-phase="1"] .tile-read, .tiled-memory[data-phase="3"] .tile-read { stroke: var(--deck-warm-border); stroke-width: 2px; }
+.tiled-memory[data-phase="2"] .tile-compute, .tiled-memory[data-phase="3"] .tile-compute { stroke: var(--deck-accent-border); stroke-width: 2px; }
+.tiled-memory[data-phase="1"] .operand-buffer, .tiled-memory[data-phase="3"] .operand-buffer { stroke-width: 2px; }

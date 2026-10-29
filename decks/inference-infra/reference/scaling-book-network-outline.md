@@ -1,6 +1,6 @@
 # 从单卡到多卡：Scaling Book 阅读索引与讲解提纲
 
-本提纲接在现有第 16 页之后，继续使用 Qwen3-8B、BF16 和前文的 MLP。已按分工、互连范围、部署案例的顺序制作第 18–24 页，文字与图示结构均在 slides.md。
+本提纲接在单卡与跨算子优化之后，继续使用 Qwen3-8B、BF16 和前文的 MLP。第 19–36 页按分工、问题与应对、互连范围、P/D 部署组织。文字与图示均在 slides.md。
 
 ## 选择哪些章节
 
@@ -23,42 +23,39 @@
 
 这里先区分两种扩展。不同请求可以交给不同的模型副本，各自完成推理；也可以把同一个模型拆到多张卡，让它们共同完成一条请求。后者会产生本段重点讨论的层内通信。更多 GPU 的显存并不会自动成为一块无需搬运的共享显存。
 
-## 讲解顺序（第 18–24 页）
+## 讲解顺序（第 19–36 页）
 
-| 页码 | 主题 | 图示与步骤 |
+| 页码 | 分工 / 场景 | 典型问题与应对 |
 | --- | --- | --- |
-| 18 | 一张卡，什么时候不够用？ | 显存容量条：1 条请求与 64 条请求；提示容量、带宽与计算吞吐限制 |
-| 19 | 把一个 MLP 分给两张 GPU | 两卡分别计算中间维度 6144 的分片，再由 AllReduce 合并部分结果 |
-| 20 | 多张卡，可以怎样分工？ | DP、TP、PP、CP、EP，每次只展示一种方式 |
-| 21 | 多卡协作，为什么会等待？ | 负载不均、链路争用、同一次 AllReduce 的慢流等待，分别切换 |
-| 22 | 这些 GPU 怎样连接？ | 同一张图区分超节点内部 Scale-up 与超节点之间 Scale-out |
-| 23 | P/D 分离 | 阶段干扰，再选择两池部署在不同超节点、通过 Scale-out 交接 KV 的案例 |
-| 24 | KV 交接，可能堵在哪里？ | 沿用 P/D 案例，依次突出发送出口、路径负载不均和接收端汇聚 |
+| 19–20 | 单卡限制、两卡 MLP | 容量与计算不足 → 分片后合并局部结果 |
+| 21–22 | DP 完整副本 | 请求数相同但工作量不同 → 按长度与当前负载分配新请求 |
+| 23–24 | TP 原理与扩展问题 | 同形状部分和为何要 All-Reduce；本地计算减少，必要通信不同比例下降 |
+| 25 | 算子与访存 | 直接写入通信缓冲区 → 融合归约后的 ResidualAdd / RMSNorm |
+| 26 | 通信算法 | Ring 6 阶段 → MultiShot 2 阶段，明确 NVSwitch 支持 |
+| 27 | 计算通信协同 | 整算子串行 → 输出 tile 就绪后流水重叠 |
+| 28–29 | PP 按层分段 | 并发不足，流水线空闲 → 交错安排独立请求 |
+| 30–31 | CP 分上下文 | 等待远端 KV → 分块交换与 Attention 计算重叠 |
+| 32–33 | EP 分专家 | 热门专家拥堵 → 增加该专家的副本并均衡派发 |
+| 34 | Scale-up / Scale-out | 服务器边界不等于高速互连域边界 |
+| 35 | P/D 分离 | 回顾两阶段 → 展示干扰 → 独立配置资源、交接 KV |
+| 36 | KV 交接网络 | 出口、路径偏斜、接收汇聚 |
 
-### 为什么需要多卡，以及怎样分工
+各类并行先说明分工，再讨论实际代价。TP 保留一页原理、一页核心问题，并以三个独立动画解释算子与访存、通信算法、计算通信协同；其他并行方式各两页。时间条、队列数量为定性示意，不给没有测量依据的倍数。
 
-第 18 页从权重和 KV Cache 的容量进入。Qwen3-8B 在 BF16 下，单 token 的全层 KV 为 `2 × 36 × 8 × 128 × 2 bytes = 144 KiB`。一条缓存 8192 token 的请求占 1.125 GiB；64 条独立请求占 72 GiB，再加约 15.3 GiB 权重，超过图中 80 GiB 的教学预算。预算不是某型号 GPU 的实测可用容量；尚未计工作空间，假设没有前缀共享和 KV 量化。
+DP 是推理副本，不存在训练梯度同步；调度新请求不意味着免费迁移活跃 KV。TP 先讲求和维切分与复制输出布局，再对比2卡和8卡的本地权重、计算量与部分输出形状。优化保留必要求和：减少拷贝与中间物化、用合适的collective减少阶段、在满足数据依赖时重叠。MultiShot不是把AllReduce改写成两种collective便自动得到2轮；NVSwitch多播是明确条件。重叠也可能竞争SM/HBM，不能用图的长度承诺加速。PP 只交错独立请求，不能提前计算尚未生成的 token。CP 案例限定长序列 Prefill，分块 Attention 需正确维护归一化与部分输出，仍有通信。EP 明确是 MoE，Qwen3-8B 稠密模型没有这些专家；复制热门专家需要额外显存。
 
-第 19 页沿用 Qwen MLP，将中间维度 12288 分为两个 6144。gate、up 与激活可以本地计算；down 产生形状相同的部分结果。需要每卡持有完整输出时，用 AllReduce 求和。每卡工作减少，同时新增通信，不承诺两倍加速。
+P/D 是阶段分离，是否经过 Scale-out 取决于放置。两池都需要可运行完整模型的权重；图中选择跨超节点交接 KV，持续生成在 D 侧追加缓存。低批量 Decode 通常受显存带宽约束，长 Prefill 更容易受算力约束，但瓶颈随形状和硬件变化。
 
-第 20 页扩展分工方式：DP 分请求，TP 分矩阵，PP 分层，CP 分上下文，EP 分专家。DP 采用推理副本语境；CP 与 Megatron 中的 SP 命名区分；EP 明确切换为 MoE，不将专家画成 Qwen3-8B 的结构。
+KV 交接页的三种瓶颈也不是 Scale-out 独有，只解释选定部署中的位置；各请求交接独立，不构成一次 AllReduce。PagedAttention 留在第 38–42 页的存储部分。
 
-### 多卡协作的代价
+## 补充来源与验证
 
-第 21 页集中讨论通用的等待，避免在 Scale-out 部分重复介绍。先看独立请求负载不均，再看共享链路上的争用，最后换成同一次 AllReduce 中的慢流时间线。独立请求副本不必同步；集合通信里依赖完整结果的计算会受到必要慢流影响。这些机制不限定于某个互连范围。
+- [vLLM 专家并行与负载均衡](https://docs.vllm.ai/en/latest/serving/expert_parallel_deployment/)：额外专家副本、容量成本。
+- [Ring Attention](https://arxiv.org/abs/2310.01889)：分块 KV 通信与 Attention 计算的重叠。
+- [TensorRT-LLM User Buffer 与 Reduce Fusion](https://developer.nvidia.com/blog/boost-llama-model-performance-on-microsoft-azure-ai-foundry-with-nvidia-tensorrt-llm/)：减少拷贝与相邻算子开销。
+- [MultiShot](https://developer.nvidia.com/blog/3x-faster-allreduce-with-nvswitch-and-tensorrt-llm-multishot/)：算法阶段及 NVSwitch 条件。
+- [FLUX](https://arxiv.org/html/2406.06858v4)：tile 粒度的通信融合与重叠。
+- [Megatron-LM 第 3 节](https://arxiv.org/html/1909.08053v4#S3)：非线性之前的同步、列并行与行并行配对。
+- [Scaling Book GPU 章节](https://jax-ml.github.io/scaling-book/gpus/)：通信代价与互连。
 
-### 分工与互连范围
-
-第 22 页建立物理边界。超节点按一个高速 Scale-up 互连域理解，可能包含多台服务器；不同域通过网卡和交换网络形成 Scale-out 互连。服务器边界不直接等同于互连域边界。同一种并行分工可以留在域内，也可以跨域，不能把 TP、DP 或 P/D 与某一网络类型一一绑定。
-
-### 用跨超节点 P/D 部署串起网络问题
-
-第 23 页先展示长请求的 Prefill 对另一请求持续生成的干扰，再选用一个具体放置：P 池在超节点 A，D 池在超节点 B，KV 交接因此经过 Scale-out。P/D 分离本身不要求跨域；[DistServe §4.2](https://www.usenix.org/system/files/osdi24-zhong-yinmin.pdf)也讨论了通过节点内 NVLink 交接 KV 的放置方式。两侧都需要可运行完整模型的权重；后续生成通常在 D 侧维护新增 KV。
-
-第 24 页扩大 P 池，在同一张图上观察三个独立的瓶颈假设。发送端出口不足时，KV 在发送前排队；出口充足而路径分配不均时，部分路径拥堵；多个 P 同时向一个 D 交接时，接收端可能成为瓶颈。这些问题不是 Scale-out 独有，本页解释它们在选定部署中发生的位置。不同请求的交接独立，不构成 AllReduce，不要求所有 KV 共同到齐。
-
-只解释瓶颈位置，不展开协议和并行组合。PagedAttention 与缓存存储管理留到存储部分。网络机制参考 [Scaling Book GPU 章节](https://jax-ml.github.io/scaling-book/gpus/)、[NVIDIA Spectrum-X 网络架构说明](https://resources.nvidia.com/en-us-accelerated-networking-resource-library/nvidia-spectrum-x)及 [NCCL 网络诊断](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/networking_troubleshooting.html)。
-
-## 编辑与验证
-
-第 18–24 页共 18 个显示状态，其中第 22 页静态展示。右方向键或空格前进，左方向键回退。全部文字、标签、图形结构与来源保存在 slides.md；style.css 负责通用图示样式。构建与逐状态截图检查记录在 evidence/ 中。
+图示、文字、条件与来源均在 slides.md。每次修改后构建，并检查初始、前进与回退状态。
