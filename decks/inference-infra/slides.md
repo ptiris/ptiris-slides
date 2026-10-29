@@ -45,7 +45,7 @@ clicks: 0
     <li><span class="outline-topic">计算</span><span class="outline-description">单卡执行与优化</span></li>
     <li><span class="outline-topic">网络</span><span class="outline-description">多卡分工与通信</span></li>
     <li><span class="outline-topic">存储</span><span class="outline-description">KV 管理与内存池</span></li>
-    <li><span class="outline-topic">端侧 VLA</span><span class="outline-description">当前延迟、优化目标与实现方向</span></li>
+    <li><span class="outline-topic">端侧 VLA</span><span class="outline-description">闭环中的推理延迟与端侧优化</span></li>
   </ol>
 </div>
 
@@ -1200,94 +1200,12 @@ clicks: 2
 第一幅图采用 80 GiB 显存容量预算作教学示意，不是某一型号 GPU 的实测可用显存；硬件标称 GB 与 GiB 不能直接等同。条形按 10 px/GiB 绘制，权重约 15.3 GiB，未计工作空间与其他运行时开销。
 Qwen3-8B：36 层、8 个 KV heads、head_dim=128，BF16 每元素 2B。单 token 的全层 KV=2×36×8×128×2=147456B=144KiB；8192 token 请求为 1.125GiB。假设各请求独立、KV 全部保留，不做前缀共享或 KV 量化。
 64 条请求的 KV=72GiB，权重加 KV 约87.3GiB，已经超过80GiB预算。固定模型与精度时，KV 与各请求实际保留的 token 总数成正比；增加并发或延长已缓存的上下文都会使 KV 增长。不是仅调大最大长度配置就必然立即占满显存。Qwen3-8B 的权重本身可以放进这一容量预算，不要把本例说成“8B 模型必须多卡”。
-[click] 切换到更大模型的定性示意。此时即使没有 KV，权重本身也越过单卡显存边界；不沿用上一图的 Qwen3-8B 数值，长条不对应指定模型的精确容量。给多张卡各放一份完整副本解决不了这一容量问题，可以切分模型，使每张卡只保留部分权重。量化和卸载也是其他可选方案；这里选择多卡展开后面的 MLP 分片。
+[click] 切换到更大模型的定性示意。此时即使没有 KV，权重本身也越过单卡显存边界；不沿用上一图的 Qwen3-8B 数值，长条不对应指定模型的精确容量。给多张卡各放一份完整副本解决不了这一容量问题，可以切分模型，使每张卡只保留部分权重。量化和卸载也是其他可选方案；这里选择多卡展开后面的并行分工。
 [click] 第三个场景里，权重与 KV 均能放入显存，瓶颈在计算。在算力受限的长 Prefill 中，GPU 计算单元忙碌，计算耗时仍超过服务目标。时间条仅表示定性关系，不代表实测数据；GPU 忙碌本身也不能证明 compute-bound，实际应通过算子测量、Roofline 和 profiler 判断。多卡可通过分片分担一次请求的计算，或通过副本并行提高多请求吞吐；通信开销和负载分配决定实际收益，不保证单请求按卡数线性加速。
-多卡可以分担存储或计算，但具体该分请求、分权重还是分计算，需要识别瓶颈。后续将追踪同一个 MLP 分到两张卡后，哪些数据必须交换。
+多卡可以分担存储或计算，但具体该分请求、分权重还是分计算，需要识别瓶颈。后续先讲不同副本处理独立请求的 DP，再讲 TP 如何切分同一次计算，以及由此产生的通信。
 配置：https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json
 容量分析：https://jax-ml.github.io/scaling-book/transformers/
 推理：https://jax-ml.github.io/scaling-book/inference/
--->
-
-
----
-class: diagram-page
-clicks: 1
----
-
-# 把一个 MLP 分给两张 GPU
-
-::left::
-
-<figure class="gemm-figure network-figure" :data-phase="Math.min($clicks, 1)" aria-label="两张GPU各处理中间维度6144的gate、up、SiLU和down分片。输入相同，中间激活本地计算，下投影产生部分和Y0、Y1。点击后通过AllReduce相加，两卡各得到完整输出Y。">
-  <p class="gemm-context">同一个 MLP：4096 → 12288 → 4096</p>
-  <svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
-<defs>
-    <marker id="mlp-shard-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker>
-    </defs>
-    <rect class="device" x="270" y="62" width="652" height="163" rx="3" />
-    <rect class="device" x="270" y="250" width="652" height="163" rx="3" />
-    <rect class="operation" x="10" y="193" width="180" height="84" rx="3" />
-    <text x="100" y="226">同一份输入 X</text>
-    <text class="annotation" x="100" y="260">[m, 4096]</text>
-    <path d="M 198 235 H 230" />
-    <path d="M 230 235 V 149 H 285" marker-end="url(#mlp-shard-arrow)" />
-    <path d="M 230 235 V 337 H 285" marker-end="url(#mlp-shard-arrow)" />
-    <text class="matrix-name" x="596" y="95">GPU 0 · 中间维度 6144</text>
-    <rect class="output-tile" x="293" y="120" width="170" height="58" rx="3" />
-    <text class="operation-label" x="378" y="156">gate / up</text>
-    <path class="" d="M 464 149 H 498" marker-end="url(#mlp-shard-arrow)" />
-    <rect class="output-tile" x="507" y="120" width="132" height="58" rx="3" />
-    <text class="" x="573" y="156">SiLU ×</text>
-    <path class="" d="M 640 149 H 674" marker-end="url(#mlp-shard-arrow)" />
-    <rect class="output-tile" x="683" y="120" width="213" height="58" rx="3" />
-    <text class="operation-label" x="789" y="156">down_proj</text>
-    <text class="annotation" x="378" y="208">4096 → 6144</text>
-    <text class="annotation" x="789" y="208">6144 → 4096</text>
-    <path class="" d="M 922 149 H 960" marker-end="url(#mlp-shard-arrow)" />
-    <rect :class="$clicks === 0 ? 'operation' : 'output-tile'" x="970" y="113" width="174" height="86" rx="3" />
-    <text x="1057" y="145">{{ $clicks === 0 ? '部分结果 Y₀' : '完整输出 Y' }}</text>
-    <text class="annotation" x="1057" y="180">[m, 4096]</text>
-    <text class="matrix-name" x="596" y="283">GPU 1 · 中间维度 6144</text>
-    <rect class="tile-input" x="293" y="308" width="170" height="58" rx="3" />
-    <text class="operation-label" x="378" y="344">gate / up</text>
-    <path class="" d="M 464 337 H 498" marker-end="url(#mlp-shard-arrow)" />
-    <rect class="tile-input" x="507" y="308" width="132" height="58" rx="3" />
-    <text class="" x="573" y="344">SiLU ×</text>
-    <path class="" d="M 640 337 H 674" marker-end="url(#mlp-shard-arrow)" />
-    <rect class="tile-input" x="683" y="308" width="213" height="58" rx="3" />
-    <text class="operation-label" x="789" y="344">down_proj</text>
-    <text class="annotation" x="378" y="396">4096 → 6144</text>
-    <text class="annotation" x="789" y="396">6144 → 4096</text>
-    <path class="" d="M 922 337 H 960" marker-end="url(#mlp-shard-arrow)" />
-    <rect :class="$clicks === 0 ? 'operation' : 'output-tile'" x="970" y="301" width="174" height="86" rx="3" />
-    <text x="1057" y="333">{{ $clicks === 0 ? '部分结果 Y₁' : '完整输出 Y' }}</text>
-    <text class="annotation" x="1057" y="368">[m, 4096]</text>
-    <g v-if="$clicks >= 1" class="step-arrival">
-      <path class="trace-line" d="M 1057 225 V 207" marker-end="url(#mlp-shard-arrow)" />
-      <path class="trace-line" d="M 1057 271 V 293" marker-end="url(#mlp-shard-arrow)" />
-      <text class="trace-text" x="1057" y="255">AllReduce</text>
-      <text class="trace-text" x="596" y="442">Y = Y₀ + Y₁</text>
-    </g>
-  </svg>
-  <figcaption class="gemm-takeaway">
-    <span v-if="$clicks === 0">每张卡计算一半，中间激活留在本地</span>
-    <span v-else>down_proj 产生部分和，跨卡相加才得到完整输出</span>
-    </figcaption>
-</figure>
-
-::footer::
-
-<span>网络 · 多卡分工与通信</span>
-    <span>步骤 {{ Math.min($clicks, 1) + 1 }} / 2</span>
-    <span>{{ $page }} / {{ $nav.total }}</span>
-
-<!--
-采用与前文一致的 Qwen3-8B 稠密 SwiGLU MLP。输入 X[m,4096] 在两卡各保留一份；gate、up 的输出维度12288按相同方式分为6144+6144，各卡本地执行SiLU与逐元素乘法。down的输入维度按相同分区切开，因此局部下投影产生两个形状相同的部分和Y0、Y1，完整Y=Y0+Y1。这是代数分解，不是近似模型。
-图中“gate / up”合并表示两个各为4096×6144的权重分片；SiLU只作用于gate分支，再与up分支相乘。“SiLU ×”是简写，详细计算图在第6页。三个投影每卡权重合计144MiB，原MLP合计288MiB；这不包含attention、其他层、KV等。
-[click] 若两卡都需要完整输出，用AllReduce求和并让两卡得到同样的Y。竖向双箭头只表达集合通信关系，不指定底层算法或真实链路。中间激活可保持分片，不必先AllGather。若后续只需要输出分片，可以采用ReduceScatter等不同布局，这页不展开。
-每卡数学工作量减半，不代表实际加速两倍：有通信、同步以及较小GEMM的效率问题。继续用下一页解释多卡中的等待。
-矩阵分片：https://jax-ml.github.io/scaling-book/sharding/
-模型配置：https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json
 -->
 
 
@@ -1460,7 +1378,7 @@ clicks: 0
 <span>网络 · 多卡分工与通信</span><span>{{ $page }} / {{ $nav.total }}</span>
 
 <!--
-2026-10-29：把 All-Reduce 的原因从“合并结果”展开为矩阵分解。承接第20页的 Qwen3-8B MLP，H[m,12288] 是 SiLU(gate)⊙up 后的中间激活。按通道切成 H=[H0 H1]，down 的数学权重 W[12288,4096] 沿行切成竖向堆叠的 W0、W1。于是 HW=H0W0+H1W1。PyTorch Linear 通常保存转置权重，行/列在这里均指数学矩阵布局。
+2026-10-29：把 All-Reduce 的原因从“合并结果”展开为矩阵分解。沿用前文的 Qwen3-8B MLP，H[m,12288] 是 SiLU(gate)⊙up 后的中间激活。按通道切成 H=[H0 H1]，down 的数学权重 W[12288,4096] 沿行切成竖向堆叠的 W0、W1。于是 HW=H0W0+H1W1。PyTorch Linear 通常保存转置权重，行/列在这里均指数学矩阵布局。
 对任意同一输出元素 y[r,j]，GPU0 只求 i=0..6143 的和，GPU1 只求 i=6144..12287 的和。两卡都得到 m×4096，但都未包含全部输入通道的贡献，因此这些是部分和，不是输出通道的两半。All-Gather 只是拼接两份部分和，不能替代元素对应相加。
 本例下一层按列并行接收复制布局的输入，所以每卡需要同样的完整 Y。Reduce 完成求和，All 表示结果在所有参与卡上可用；All-Reduce(SUM) 正好满足两项要求。图中的集中方框表示集合通信语义，不代表有一张中央GPU或必须先集中再广播；实际可采用 ring、tree 等实现。
 若后续只需要分片输出，可以用 ReduceScatter 并调整后续布局，不必强制每个算子之后做 All-Reduce。求和是此切分下的代数要求，结果放到哪些卡由下一步布局决定。权重/激活切分方式不同，通信也不同。
@@ -2519,99 +2437,70 @@ clicks: 2
 
 ::left::
 
-<figure class="gemm-figure storage-figure" :data-phase="Math.min($clicks, 2)" aria-label="先比较两个请求连续预留的浪费，再用块表把A的逻辑块映射到分散的显存块。最后A多一个token，领取新的物理块，块尾保留一个空位。示意块大小为2token。">
-  <p class="gemm-context">{{ ['生成长度还不知道：如果先按最大长度预留显存呢？', '改为按需分块：逻辑顺序由块表记录', 'A 再生成一个 token：从空闲位置领取一个新块'][Math.min($clicks, 2)] }}</p>
-  <svg class="execution-drawing gemm-drawing network-drawing storage-drawing" viewBox="0 0 1168 510" aria-hidden="true">
-    <defs>
-      <marker id="paging-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker>
-    </defs>
-    <g v-if="$clicks === 0" class="step-arrival">
-    <text class="matrix-name" x="635" y="94">连续预留：每条请求最多 8 token</text>
-    <text class="compact-label" x="120" y="192">请求 A · 6 token</text>
-    <rect class="output-tile" x="250" y="150" width="99" height="70" rx="3" />
-    <text class="" x="299" y="194">KV</text>
-    <rect class="output-tile" x="359" y="150" width="99" height="70" rx="3" />
-    <text class="" x="408" y="194">KV</text>
-    <rect class="output-tile" x="468" y="150" width="99" height="70" rx="3" />
-    <text class="" x="517" y="194">KV</text>
-    <rect class="output-tile" x="577" y="150" width="99" height="70" rx="3" />
-    <text class="" x="626" y="194">KV</text>
-    <rect class="output-tile" x="686" y="150" width="99" height="70" rx="3" />
-    <text class="" x="735" y="194">KV</text>
-    <rect class="output-tile" x="795" y="150" width="99" height="70" rx="3" />
-    <text class="" x="844" y="194">KV</text>
-    <rect class="wait-region" x="904" y="150" width="99" height="70" rx="3" />
-    <text class="annotation" x="953" y="194">预留</text>
-    <rect class="wait-region" x="1013" y="150" width="99" height="70" rx="3" />
-    <text class="annotation" x="1062" y="194">预留</text>
-    <text class="compact-label" x="120" y="326">请求 B · 4 token</text>
-    <rect class="tile-input" x="250" y="284" width="99" height="70" rx="3" />
-    <text class="" x="299" y="328">KV</text>
-    <rect class="tile-input" x="359" y="284" width="99" height="70" rx="3" />
-    <text class="" x="408" y="328">KV</text>
-    <rect class="tile-input" x="468" y="284" width="99" height="70" rx="3" />
-    <text class="" x="517" y="328">KV</text>
-    <rect class="tile-input" x="577" y="284" width="99" height="70" rx="3" />
-    <text class="" x="626" y="328">KV</text>
-    <rect class="wait-region" x="686" y="284" width="99" height="70" rx="3" />
-    <text class="annotation" x="735" y="328">预留</text>
-    <rect class="wait-region" x="795" y="284" width="99" height="70" rx="3" />
-    <text class="annotation" x="844" y="328">预留</text>
-    <rect class="wait-region" x="904" y="284" width="99" height="70" rx="3" />
-    <text class="annotation" x="953" y="328">预留</text>
-    <rect class="wait-region" x="1013" y="284" width="99" height="70" rx="3" />
-    <text class="annotation" x="1062" y="328">预留</text>
-    <text class="annotation" x="686" y="406">已用 10 个位置，另有 6 个位置被预留</text>
-    </g>
-    <g v-else class="step-arrival">
-    <text class="matrix-name" x="205" y="94">请求 A 的块表</text>
-    <text class="annotation" x="205" y="132">逻辑块 → 显存块</text>
-    <rect class="operation" x="65" y="150" width="280" height="226" rx="3" />
-    <text class="trace-text" x="205" y="190">0 → 5</text>
-    <text class="trace-text" x="205" y="238">1 → 1</text>
-    <text class="trace-text" x="205" y="286">2 → 7</text>
-    <g v-if="$clicks === 2" class="step-arrival">
-    <text class="trace-text" x="205" y="334">3 → 3</text>
-    </g>
-    <path class="trace-line" d="M 358 255 H 500" marker-end="url(#paging-arrow)" />
-    <text class="annotation" x="430" y="221">按表读取</text>
-    <text class="matrix-name" x="830" y="94">显存：每块容纳 2 token</text>
-    <text class="annotation" x="598" y="153">块 0</text>
-    <rect class="tile-input" x="530" y="168" width="133" height="62" rx="3" />
-    <text class="hot-text" x="596" y="207">B0</text>
-    <text class="annotation" x="753" y="153">块 1</text>
-    <rect class="output-tile" x="685" y="168" width="133" height="62" rx="3" />
-    <text class="trace-text" x="751" y="207">A1</text>
-    <text class="annotation" x="908" y="153">块 2</text>
-    <rect class="wait-region" x="840" y="168" width="133" height="62" rx="3" />
-    <text class="annotation" x="906" y="207">空闲</text>
-    <text class="annotation" x="1063" y="153">块 3</text>
-    <g v-if="$clicks === 2" class="step-arrival">
-    <rect class="output-tile" x="995" y="168" width="64" height="62" rx="3" />
-    <rect class="wait-region" x="1064" y="168" width="64" height="62" rx="3" />
-    <text class="trace-text" x="1027" y="207">A3</text>
-    </g>
-    <g v-else class="step-arrival">
-    <rect class="wait-region" x="995" y="168" width="133" height="62" rx="3" />
-    <text class="annotation" x="1061" y="207">空闲</text>
-    </g>
-    <text class="annotation" x="598" y="294">块 4</text>
-    <rect class="tile-input" x="530" y="309" width="133" height="62" rx="3" />
-    <text class="hot-text" x="596" y="348">B1</text>
-    <text class="annotation" x="753" y="294">块 5</text>
-    <rect class="output-tile" x="685" y="309" width="133" height="62" rx="3" />
-    <text class="trace-text" x="751" y="348">A0</text>
-    <text class="annotation" x="908" y="294">块 6</text>
-    <rect class="wait-region" x="840" y="309" width="133" height="62" rx="3" />
-    <text class="annotation" x="906" y="348">空闲</text>
-    <text class="annotation" x="1063" y="294">块 7</text>
-    <rect class="output-tile" x="995" y="309" width="133" height="62" rx="3" />
-    <text class="trace-text" x="1061" y="348">A2</text>
-    <text class="annotation" x="205" y="418">{{ $clicks === 1 ? 'A：3 块　B：2 块' : 'A 新增 1 token，分配新块' }}</text>
-    <text class="annotation" x="830" y="418">{{ $clicks === 1 ? '逻辑上连续，物理位置可以分散' : '新块只用一半，另一半留给后续 token' }}</text>
-    </g>
-  </svg>
-  <figcaption class="gemm-takeaway">{{ ['预留的空位，会挤占其他请求可用的显存', 'Attention 按块表找到 KV，无需一整段连续显存', '分块减少浪费，不会压缩 KV 本身'][Math.min($clicks, 2)] }}</figcaption>
+<figure class="gemm-figure storage-figure" :data-phase="Math.min($clicks, 2)" aria-label="请求 A 和 B 各有按顺序排列的逻辑 KV 块，块表将它们映射到同一个显存池中分散的物理块。每格是一个 token 的 KV，每块容纳两个 token。A 的句子为 The robot picks up the red cup，B 为 Birds can fly high。最后为新词 cup 对应的 KV 分配一个物理块，原有块不搬动。">
+<p class="gemm-context">{{ ['生成长度还不知道：如果先按最大长度预留显存呢？', '用字词标记对应的 KV，每块容纳 2 个 token', '“cup”的 KV 加入：只领一个新块，已有块保持原位'][Math.min($clicks, 2)] }}</p>
+<svg class="execution-drawing gemm-drawing network-drawing storage-drawing" viewBox="0 0 1168 510" aria-hidden="true">
+<defs><marker id="paging-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker></defs>
+<g v-if="$clicks === 0" class="step-arrival">
+<text class="matrix-name" x="635" y="94">连续预留：每条请求最多 8 token</text>
+<text class="compact-label" x="120" y="192">请求 A · 6 token</text>
+<g v-for="(token, i) in ['The', 'robot', 'picks', 'up', 'the', 'red', '预留', '预留']" :key="'reserved-a-' + i">
+<rect :class="i &lt; 6 ? 'output-tile' : 'wait-region'" :x="250 + i * 109" y="150" width="99" height="70" rx="3" />
+<text :class="i &lt; 6 ? 'trace-text' : 'annotation'" :x="299 + i * 109" y="194">{{ token }}</text>
+</g>
+<text class="compact-label" x="120" y="326">请求 B · 4 token</text>
+<g v-for="(token, i) in ['Birds', 'can', 'fly', 'high', '预留', '预留', '预留', '预留']" :key="'reserved-b-' + i">
+<rect :class="i &lt; 4 ? 'tile-input' : 'wait-region'" :x="250 + i * 109" y="284" width="99" height="70" rx="3" />
+<text :class="i &lt; 4 ? 'hot-text' : 'annotation'" :x="299 + i * 109" y="328">{{ token }}</text>
+</g>
+<text class="annotation" x="686" y="406">已用 10 个位置，另有 6 个位置被预留</text>
+</g>
+<g v-else class="step-arrival">
+<text class="trace-text matrix-name" x="200" y="77" font-weight="700">请求 A</text>
+<text x="200" y="120">逻辑 KV 块</text>
+<text class="matrix-name" x="628" y="77">显存中的物理 KV 块</text>
+<text class="hot-text matrix-name" x="1000" y="77" font-weight="700">请求 B</text>
+<text x="1000" y="120">逻辑 KV 块</text>
+<text class="trace-text annotation" x="405" y="120">块表</text>
+<text class="hot-text annotation" x="826" y="120">块表</text>
+<g v-for="(tokens, block) in ($clicks === 1 ? [['The','robot'],['picks','up'],['the','red']] : [['The','robot'],['picks','up'],['the','red'],['cup','空位']])" :key="'logical-a-' + block">
+<text class="annotation" x="34" :y="185 + block * 48">{{ '块 ' + block }}</text>
+<g v-for="(token, cell) in tokens" :key="'logical-a-cell-' + cell">
+<rect class="output-tile" :x="70 + cell * 130" :y="152 + block * 48" width="130" height="48" />
+<text :class="token === '空位' ? 'annotation' : 'trace-text'" :x="135 + cell * 130" :y="185 + block * 48" :font-weight="block === 3 ? 700 : 400">{{ token }}</text>
+</g>
+</g>
+<g v-for="(tokens, block) in [['Birds','can'],['fly','high']]" :key="'logical-b-' + block">
+<text class="annotation" x="1144" :y="185 + block * 48">{{ '块 ' + block }}</text>
+<g v-for="(token, cell) in tokens" :key="'logical-b-cell-' + cell">
+<rect class="tile-input" :x="880 + cell * 120" :y="152 + block * 48" width="120" height="48" />
+<text class="hot-text" :x="940 + cell * 120" :y="185 + block * 48">{{ token }}</text>
+</g>
+</g>
+<g v-for="(block, i) in [{owner:'B', tokens:['Birds','can']}, {owner:'A', tokens:['picks','up']}, {owner:'', tokens:['空闲','']}, {owner:$clicks === 2 ? 'A' : '', tokens:$clicks === 2 ? ['cup','空位'] : ['空闲','']}, {owner:'B', tokens:['fly','high']}, {owner:'A', tokens:['The','robot']}, {owner:'', tokens:['空闲','']}, {owner:'A', tokens:['the','red']}]" :key="'physical-block-' + i">
+<rect class="operation" x="480" :y="107 + i * 38" width="56" height="38" />
+<text class="annotation" x="508" :y="134 + i * 38">{{ i }}</text>
+<g v-for="(token, cell) in block.tokens" :key="'physical-cell-' + cell">
+<rect :class="block.owner === 'A' ? 'output-tile' : block.owner === 'B' ? 'tile-input' : 'operation'" :x="536 + cell * 120" :y="107 + i * 38" width="120" height="38" />
+<text :class="token === '空位' || !block.owner ? 'annotation' : block.owner === 'A' ? 'trace-text' : 'hot-text'" :x="596 + cell * 120" :y="134 + i * 38" :font-weight="i === 3 &amp;&amp; $clicks === 2 ? 700 : 400">{{ token }}</text>
+</g>
+</g>
+<path class="trace-line" d="M 338 176 H 362 C 400 176 414 316 446 316 H 472" marker-end="url(#paging-arrow)" />
+<path class="trace-line" d="M 338 224 H 380 C 412 224 430 164 446 164 H 472" marker-end="url(#paging-arrow)" />
+<path class="trace-line" d="M 338 272 H 350 C 398 272 424 392 446 392 H 472" marker-end="url(#paging-arrow)" />
+<path class="memory-line" d="M 872 176 H 852 C 828 176 824 126 810 126 H 784" marker-end="url(#paging-arrow)" />
+<path class="memory-line" d="M 872 224 H 852 C 828 224 824 278 810 278 H 784" marker-end="url(#paging-arrow)" />
+<g v-if="$clicks === 2" class="step-arrival">
+<rect class="hardware-boundary" x="70" y="296" width="260" height="48" style="stroke:var(--deck-accent);stroke-width:2.5px" />
+<rect class="hardware-boundary" x="480" y="221" width="296" height="38" style="stroke:var(--deck-accent);stroke-width:2.5px" />
+<path class="trace-line" d="M 338 320 H 390 C 416 320 430 240 446 240 H 472" style="stroke-width:2.5px" marker-end="url(#paging-arrow)" />
+</g>
+<text class="annotation" x="200" y="395">{{ $clicks === 1 ? '逻辑块：0 → 1 → 2' : '新增逻辑块 3 → 物理块 3' }}</text>
+<text class="annotation" x="1000" y="309">逻辑块：0 → 1</text>
+<text class="annotation" x="628" y="439">{{ $clicks === 1 ? '已分配 5 块 · 空闲 3 块' : '已分配 6 块 · 空闲 2 块' }}</text>
+</g>
+</svg>
+<figcaption class="gemm-takeaway">{{ ['预留的空位，会挤占其他请求可用的显存', 'Attention 按块表找到 KV，无需一整段连续显存', '按需领块，已有 KV 不搬动；末块仍可能留有空位'][Math.min($clicks, 2)] }}</figcaption>
 </figure>
 
 ::footer::
@@ -2620,13 +2509,14 @@ clicks: 2
 
 <!--
 上一页的36GiB是实际KV数据量；本页再看显存分配方式会不会额外浪费容量。固定一个小例子：A有6个token，B有4个token，最多各生成到8个token。两种方式均展示16个token位置的总容量。每块2token只为绘图清楚，不是vLLM推荐或默认配置。
-初始：一种朴素连续分配方案按每请求最大长度预留8个位置，A占用6个，B占用4个，另外6个空位被预留而无法交给其他请求。本图展示预留浪费；连续分配还可能有不同请求结束后产生的外部碎片，但此处不另外堆一个例子。
-[click] PagedAttention将逻辑KV分成固定token数的块。A的逻辑块0、1、2分别映射到物理块5、1、7；B使用0、4。A/B共用5个物理块，另外3个可用于其他请求。块表给Attention kernel提供物理地址映射，kernel按映射读取对应的K/V，而不是先将整个KV搬成一段连续区域。图中只画A的块表，B也有自己的块表。A0表示A的逻辑块0，不是单个token；每个实心块此时包含2个token的KV。
-[click] A新增1个token时，逻辑块3映射到原本空闲的物理块3。末块只用一个位置，第二个位置供后续token填入。固定块分配减少预留及外部碎片，仍可能存在末块未填满的内部浪费；新KV本身没有压缩。请求结束后，不再被任何请求或前缀缓存引用的块可以归还。共享相同前缀、引用计数和写时复制是可进一步建立的机制，本页不展开。
-这里介绍原始PagedAttention的分块与映射思想，不承诺当前vLLM所有attention backend都采用同一个历史kernel。KV块也不是CUDA线程块。
+参考用户提供的图，采用“请求A的逻辑KV块—显存中的物理KV块—请求B的逻辑KV块”布局。请求A使用“The robot picks up the red cup”，请求B使用“Birds can fly high”。图中按一词一个token作教学示意，实际token边界由模型的分词器决定。字词只是对应KV的可读标签；每格存放该位置的K/V张量，不是字词本身，也不是一个完整块。左右是逻辑视图，中间是实际分配的物理块，同一标签出现两次是映射关系，不表示复制两份KV。蓝色属于A，暖色属于B；物理池中间的数字是物理块号，左右“块0/1/2”是各请求自己的逻辑块号。
+初始：一种朴素连续分配方案按每请求最大长度预留8个位置，A占用6个，B占用4个，另外6个空位被预留而无法交给其他请求。本图展示预留浪费，不另外展开外部碎片。
+[click] A的逻辑块0、1、2分别映射到物理块5、1、7，内容依次为The/robot、picks/up、the/red。B的逻辑块0、1映射到物理块0、4，内容为Birds/can、fly/high。A/B分别维护块表，箭头表示块表中的地址映射，不是数据搬运方向。两请求共分配5个物理块，物理块2、3、6仍空闲，可分配给其他请求。逻辑顺序不受物理地址顺序影响；Attention kernel按块表读取对应K/V，不必先拼成连续区域。
+[click] A继续生成“cup”，这个token经过模型计算产生KV后，分配逻辑块3，映射到原本空闲的物理块3。此块的第二个位置仍属于A，留给后续token，不能再独立分配给B。新边框与箭头同时出现，原有内容和映射保持不变。此时分配6块、空闲2块；实际KV数据共11格，已分配容量12格，末块有1格内部空位。分页减少预留及外部碎片，不压缩KV本身。
+请求结束后，不再被请求或前缀缓存引用的块可以归还。同前缀共享、引用计数与写时复制本页不展开。这里介绍原始PagedAttention的分块映射思想，不承诺当前vLLM所有attention backend使用同一个历史kernel；KV块也不是CUDA线程块。
+布局参考：用户提供的Request A / Request B—Logical KV blocks—Physical KV blocks示意图。
 原论文：https://arxiv.org/abs/2309.06180
 原始机制图解：https://vllm.ai/blog/2023-06-20-vllm
-
 -->
 
 
@@ -2859,7 +2749,7 @@ clicks: 0
 # 端侧 VLA · 从部署到优化
 
 <!--
-讲完计算、网络和存储，最后回到端侧 VLA。先看公开延迟记录和 Thor 优化目标，再用 UMA 与 Persistent MegaKernel 两个示意说明工作方向。公开结果与我们的目标分开呈现。
+讲完计算、网络和存储，最后回到端侧 VLA。以同步推理为背景，说明推理位于任务关键路径，用 PhyAI 的 Thor BF16 三视角记录说明当前延迟，再讲加速推理对任务效率和成功率的意义。最后用 UMA 与 Persistent MegaKernel 两个示意说明优化方向。
 -->
 
 ---
@@ -2867,77 +2757,53 @@ class: diagram-page
 clicks: 0
 ---
 
-# VLA 优化目标
+# VLA 推理位于关键路径
 
 ::left::
 
-<figure class="gemm-figure" aria-label="π0.5 在三视角输入下的公开延迟记录，以及 Thor 的 BF16 与 FP8 优化目标">
-<p class="gemm-context">π₀.₅ · 3-view · batch 1</p>
+<figure class="gemm-figure" aria-label="同步推理场景：观测、VLA推理、动作执行依次进行。推理位于任务关键路径，加速推理有助于提升任务效率与成功率。下方展示PhyAI的Thor BF16三视角推理记录。">
+<p class="gemm-context">同步推理：推理完成后，再执行下一段动作</p>
 <svg class="execution-drawing gemm-drawing network-drawing" viewBox="0 0 1168 510" aria-hidden="true">
-<text class="left-label annotation" x="25" y="98">设备 / 实现</text>
-<text x="480" y="72">实验配置</text>
-<text x="365" y="108">View</text>
-<text x="480" y="108">H</text>
-<text x="600" y="108">去噪步数</text>
-<text class="annotation" x="735" y="98">公开延迟</text>
-<path class="rule-line" d="M 20 126 H 810" />
-<path class="rule-line" d="M 840 72 V 435" />
-<text class="left-label" x="25" y="184">RTX 4090 · BF16</text>
-<text class="left-label" x="25" y="216">FlashVLA 基线</text>
-<text x="365" y="200">3</text>
-<text x="480" y="200">50</text>
-<text x="600" y="200">10</text>
-<text x="735" y="200" font-weight="700">55.4 ms</text>
-<path class="rule-line" d="M 20 250 H 810" />
-<text class="left-label" x="25" y="284">Thor · BF16</text>
-<text class="left-label" x="25" y="316">PhyAI</text>
-<text x="365" y="300">3</text>
-<text x="480" y="300">50</text>
-<text x="600" y="300">10</text>
-<text x="735" y="300" font-weight="700">约 135 ms</text>
-<path class="rule-line" d="M 20 350 H 810" />
-<text class="left-label" x="25" y="384">Thor · FP8</text>
-<text class="left-label" x="25" y="416">FlashRT</text>
-<text x="365" y="400">3</text>
-<text x="480" y="400">10</text>
-<text x="600" y="400">10</text>
-<text x="735" y="400" font-weight="700">49.02 ms</text>
-<text class="matrix-name trace-text" x="1000" y="98">Thor 优化目标</text>
-<rect class="tile-input" x="877" y="140" width="245" height="112" rx="3" />
-<text x="1000" y="180">BF16</text>
-<text class="trace-text" x="1000" y="223" font-weight="700">约 70 ms</text>
-<rect class="output-tile" x="877" y="306" width="245" height="112" rx="3" />
-<text x="1000" y="346">FP8</text>
-<text class="trace-text" x="1000" y="389" font-weight="700">30 ms 量级</text>
+<defs><marker id="vla-feedback-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse" overflow="visible"><path class="arrowhead" d="M 2 2 L 10 6 L 2 10" /></marker></defs>
+<rect class="device" x="50" y="82" width="230" height="112" rx="3" />
+<rect class="tile-input" x="420" y="82" width="330" height="112" rx="3" />
+<rect class="output-tile" x="890" y="82" width="230" height="112" rx="3" />
+<path class="trace-line" d="M 288 138 H 412" marker-end="url(#vla-feedback-arrow)" />
+<path class="trace-line" d="M 758 138 H 882" marker-end="url(#vla-feedback-arrow)" />
+<path class="trace-line" d="M 1005 202 V 244 H 165 V 202" marker-end="url(#vla-feedback-arrow)" />
+<rect class="label-paper" x="454" y="226" width="262" height="35" />
+<text x="165" y="129" font-weight="700">观测</text>
+<text class="annotation" x="165" y="169">图像 · 状态</text>
+<text class="hot-text" x="585" y="129" font-weight="700">VLA 推理</text>
+<text x="585" y="169">生成动作序列</text>
+<text class="trace-text" x="1005" y="129" font-weight="700">执行动作</text>
+<text class="annotation" x="1005" y="169">执行当前动作段</text>
+<text class="annotation" x="585" y="252">执行后再次观测</text>
+<path class="rule-line" d="M 50 292 H 1120" />
+<text class="left-label" x="50" y="343" font-weight="700">PhyAI · π₀.₅ · Thor BF16</text>
+<text class="left-label" x="50" y="390">3-view · H=50 · 10 步 · batch 1</text>
+<text class="annotation" x="740" y="343">推理延迟</text>
+<text class="annotation" x="1005" y="343">推理频率</text>
+<text class="hot-text" x="740" y="390" font-weight="700">约 135 ms / 次</text>
+<text class="trace-text" x="1005" y="390" font-weight="700">7.43 次 / 秒</text>
 </svg>
+<figcaption class="gemm-takeaway">加速推理，有助于提升任务效率与成功率</figcaption>
 </figure>
 
 ::footer::
 
-<span>端侧 VLA · 优化目标</span><span>{{ $page }} / {{ $nav.total }}</span>
+<span>端侧 VLA · 同步推理</span><span>{{ $page }} / {{ $nav.total }}</span>
 
 <!--
-2026-10-29 按 3-view 重新核对。本页只保留相机视角数有明确依据的 π0.5 记录，batch 均为 1，去噪均为 10 步。View 指输入相机视角数，H 指每次生成的动作序列长度，不是执行动作数。三行属于不同实现和计时范围，且 FP8 的 H=10、BF16 的 H=50；不据此计算跨行加速比，也不称为我们的实测。
+本页限定同步推理：取得观测后运行VLA，等待推理完成，再执行所选动作段，随后开始下一轮。动作执行与下一轮VLA推理不重叠，因此推理耗时直接位于任务的关键路径。图中的回路表示策略调用顺序，不表示相机或低层控制器也必须停止工作。
+在动作质量与其他条件相当时，缩短推理可减少动作段之间的等待，提高任务效率；减少停顿和观测滞后，也有助于动态、精细或有时间限制的任务完成。页内“有助于提升成功率”表达优化动机，不宣称所有任务必然改善，不提供未经测量的成功率增幅。本页不再讲异步流水或画连续模型调用的吞吐时间线。
 
-RTX 4090 BF16 55.4 ms：FlashVLA README 的 Latency Benchmark，取“π0.5”基线行的 3-view 列，不是“+ FlashVLA”行。基线已使用 CUDA Graph 和 kernel fusion，不是原生 OpenPi eager。100 次调用均值，预热 10 次。latency_baseline.yaml 指定 BF16、compile、fuse_qkv / fuse_gate_up；PI05Config 的 chunk_size=50、num_inference_steps=10。脚本先准备 batch，再以 perf_counter 配合 CUDA synchronize 测 predict_action_chunk，排除外部 batch 预处理。脚本对 3 路真实相机额外保留一个 empty camera slot；View 列不计算补齐槽位。
-https://github.com/z-lab/flashvla#latency-benchmark
-https://github.com/z-lab/flashvla/blob/main/benchmarks/configs/latency_baseline.yaml
-https://github.com/z-lab/flashvla/blob/main/flashvla/policies/pi05/configuration_pi05.py
-https://github.com/z-lab/flashvla/blob/main/benchmarks/benchmark_latency.py
-
-Thor BF16 约 135 ms：PhyAI 论文第 5.3 节 Figure 5 的 batch=1 点，明确为 BF16、3 cameras、50 actions、10 Euler steps、CUDA Graphs，预热 10 次后测 50 次。正文给出 Thor 单请求吞吐 7.43 samples/s，因此换算平均单次延迟为 1000 / 7.43 = 134.59 ms，页内取整为“约 135 ms”。这是由公开吞吐换算的 PhyAI runner 延迟，不是直接公布的精确毫秒值，也不是 OpenPi 原生基线。计时排除采集、传输、排队和执行器交接。不要混用论文 Table 5 的 107.699 ms：那属于另一组 single-request 比较，不能自动套用 Figure 5 的配置。
+公开记录：PhyAI的π0.5，Thor、BF16、3 cameras、H=50 actions、10 Euler去噪步、batch=1、CUDA Graphs。论文第5.3节Figure 5的单请求吞吐为7.43 samples/s，平均单次推理时间换算为1000 / 7.43 = 134.59 ms，页内取约135 ms/次。每个点预热10次、计时50次。H是一次预测的动作序列长度，不代表同步执行必须用完全部50个动作。
+计时为PhyAI runner的GPU推理，排除观测采集、传输、请求排队和执行器交接。不是我们的实测，也不是原生OpenPi基线；不能混用Table 5另一配置下的107.699 ms。7.43次/秒是模型推理能力，不是包含动作执行时间的同步闭环频率，也不是电机伺服频率。这个延迟记录用于说明当前推理开销，不作为整机任务效率或成功率的测量结果。
 https://arxiv.org/html/2608.03682v1#S5.SS3
 https://github.com/mingti-org/phyai/blob/main/benchmark/pi05/profile_pi05.py
 
-Thor FP8 49.02 ms：FlashRT 的 Pi0.5 Thor NVFP4 End-to-End Results，“Current Result (2026-08-05)”表的 3-view / Same-run FP8 p50 列。取 FP8 对照，不是 NVFP4 结果。Torch frontend 生产配置 Sa=10、steps=10；使用 FP8 投影及 FP16 中间路径、FA4、CUDA Graph，非所有张量均为 FP8。MAXN、固定 GPC/NVD 时钟，20 次预热、100 次完整 infer()；包含图像预处理和上传、模型、同步、动作下载与后处理。这是文档保留的一次具体 session；作者说明 Thor FP8 延迟会随设备状态变动，并建议复现时使用约 300 次预热，不能把该值当作稳定保证。另一次 public API 验证为 45.75 ms，不能与其他 session 混算加速比。同表 31.74 ms 属于 NVFP4 + FA4，不能写成 FP8 已达到 30 ms。
-https://github.com/flashrt-project/FlashRT/blob/main/docs/pi05_thor_decoder_fp4_e2e.md#current-result-2026-08-05
-https://github.com/flashrt-project/FlashRT/blob/main/flash_rt/frontends/torch/pi05_thor.py
-
-移除旧版的 2-view 数据：NVIDIA OpenPi compile BF16 132 ms，以及 APXInf Thor BF16 72.45 / FP8 41.16 ms，均为两路输入、H=10、10 步；不能直接改成 3-view。PI 论文的 RTX 4090 76 ms 没有披露对应的视角数，也移出本页。此次未找到配置完整、可核验的 OpenPi 或 APXInf 3-view Thor BF16 记录，因此改用明确署名的 PhyAI 记录。
-https://www.jetson-ai-lab.com/tutorials/openpi_on_thor/#performance
-https://github.com/RLinf/APXinf-robo#performance
-
-右侧 BF16 约 70 ms、FP8 30 ms 量级仍是用户提出的 Thor 优化目标。后续在同一模型、3-view、动作 H、语言长度、去噪步数、计时范围和设备功耗模式下建立我们的实测，再比较优化收益与动作质量。
+Physical Intelligence对同步执行的说明及延迟对任务表现的影响：https://www.pi.website/research/real_time_chunking
 -->
 
 ---

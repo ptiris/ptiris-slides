@@ -1,6 +1,6 @@
 # 推理基础设施介绍
 
-当前报告共 45 页：开场案例与 Infra 职责、Qwen GEMM 与 Roofline、Mega Kernel、多卡网络和 KV 存储；最后以端侧 VLA 的当前延迟、优化目标与实现方向收尾。
+当前报告共 44 页：开场案例与 Infra 职责、Qwen GEMM 与 Roofline、Mega Kernel、多卡网络和 KV 存储；最后以端侧 VLA 的闭环推理延迟与实现优化方向收尾。
 
 1. 模型评测：任务背景、HF 的串行执行示意、提问者报告的评测结果。
 2. Robot Harness：任务预算、观察和动作的闭环、提高 reasoning effort 的预实验结果。
@@ -12,7 +12,7 @@ npm ci
 npm run dev -- inference-infra
 ```
 
-打开 http://localhost:3030，按空格或右箭头翻页，按 P 进入演讲者模式。第 10–16、19–20、22、24–27、29、31、33、35–36、38–42、45 页含点击步骤；同一页的步骤完成后进入下一页。
+打开 http://localhost:3030，按空格或右箭头翻页，按 P 进入演讲者模式。第 10–16、19、21、23–26、28、30、32、34–35、37–41、44 页含点击步骤；同一页的步骤完成后进入下一页。
 
 ```sh
 npm run build
@@ -39,34 +39,34 @@ npm run export -- inference-infra
 | 9–16 | 单卡执行与优化 | PyTorch / GEMM → Prefill / Decode → Roofline 与调优 |
 | 17 | 跨算子优化 | Mega Kernel 的执行方式与取舍 |
 | 18 | 网络章节页 | 更多计算资源带来怎样的通信代价 |
-| 19–20 | 多卡的起点 | 单卡限制 → 两卡 MLP |
-| 21–22 | DP | 完整副本与请求负载 |
-| 23–27 | TP | 部分和 → 扩展收益 → 算子、通信算法与重叠 |
-| 28–33 | PP / CP / EP | 各自分工、典型问题与应对 |
-| 34–36 | 互连与 P/D | 互连范围 → 回顾 P/D → 阶段分离与 KV 交接 |
-| 37 | 存储章节页 | KV 怎样省空间、少重算 |
-| 38–42 | KV 管理与内存池 | 增长与分页 → 外部池 → RDMA / CXL |
-| 43–45 | 端侧 VLA | 公开延迟与 Thor 优化目标 → UMA / Persistent MegaKernel |
+| 19 | 多卡的起点 | KV 增长、权重放不下、算力不足 |
+| 20–21 | DP | 完整副本与请求负载 |
+| 22–26 | TP | 部分和 → 扩展收益 → 算子、通信算法与重叠 |
+| 27–32 | PP / CP / EP | 各自分工、典型问题与应对 |
+| 33–35 | 互连与 P/D | 互连范围 → 回顾 P/D → 阶段分离与 KV 交接 |
+| 36 | 存储章节页 | KV 怎样省空间、少重算 |
+| 37–41 | KV 管理与内存池 | 增长与分页 → 外部池 → RDMA / CXL |
+| 42–44 | 端侧 VLA | 同步推理的关键路径与 PhyAI 延迟 → UMA / Persistent MegaKernel |
 
 封面和章节页只显示一个标题，章节名采用陈述式概括；目录保留章节与简短内容概括。正文页脚标明当前部分。所有文字仍在 `slides.md` 中编辑。
 
 ## 多卡与网络部分
 
-第 19–20 页讲单卡限制与两卡 MLP。第 21–33 页依次讲 DP、TP、PP、CP、EP。TP 用第 23–27 页展开：部分和为何求和、计算节省与通信代价，以及三个动画例子；其余方式各用两页展示分工与应对。第 34 页区分 Scale-up / Scale-out，第 35 页先回顾 Prefilling / Decoding，再展示阶段干扰与分离部署，第 36 页追踪 KV 交接的网络瓶颈。
+第 19 页讲单卡的容量与计算限制。第 20–32 页依次讲 DP、TP、PP、CP、EP。TP 用第 22–26 页展开：部分和为何求和、计算节省与通信代价，以及三个动画例子；其余方式各用两页展示分工与应对。第 33 页区分 Scale-up / Scale-out，第 34 页先回顾 Prefilling / Decoding，再展示阶段干扰与分离部署，第 35 页追踪 KV 交接的网络瓶颈。
 
 - [讲解提纲与 Scaling Book 索引](reference/scaling-book-network-outline.md)
 - [从第 19 页预览](http://localhost:3030/19)
-- [从并行分工部分预览](http://localhost:3030/21)
-- [TP 扩展问题与三类优化](http://localhost:3030/24)
+- [从并行分工部分预览](http://localhost:3030/20)
+- [TP 扩展问题与三类优化](http://localhost:3030/23)
 
 ## 存储部分
 
-第 38–42 页依次讲 KV 增长、PagedAttention、外部 KV 池、RDMA 取回，以及 CXL 内存池。继续用 Qwen3-8B 的服务场景串联；先说明为什么需要池，再比较数据访问方式。
+第 37–41 页依次讲 KV 增长、PagedAttention、外部 KV 池、RDMA 取回，以及 CXL 内存池。继续用 Qwen3-8B 的服务场景串联；先说明为什么需要池，再比较数据访问方式。
 
 CXL 页区分容量池化与同一数据的共享，也单独说明 CPU 可寻址与 GPU 可用之间的数据路径。实际条件、计算过程与来源均放在演讲者备注中。
 
 - [存储讲解提纲与来源](reference/storage-outline.md)
-- [从第 38 页预览](http://localhost:3030/38)
+- [从第 37 页预览](http://localhost:3030/37)
 
 ## 字体
 
@@ -82,9 +82,9 @@ uv run --with fonttools --with brotli python decks/inference-infra/scripts/build
 
 - 第 10 页以 Blackwell SM100 的 128×256×64 tile 展示 X/W 沿 K 移动、固定输出块累加：当前输入块暂存 SMEM，部分和在 TMEM，寄存器承担地址、循环与输出处理；64 轮后写回。第 13–14 页仍是独立的 A100 Roofline 算例。
 - 第 12 页统一 GFLOPs / MiB，访存按冷数据、X/W 各读一次、Y 写一次估算。倍数均以 m=1 为基准，实际流量取决于复用。
-- 第 24–27 页将 TP 的扩展问题与三类优化分开：计算量对比不等于耗时预测；缓冲区和算子融合保留必要求和；Ring / MultiShot 比较通信阶段且明确 NVSwitch 条件；tile 流水图只表示执行顺序，不计算加速比。
+- 第 23–26 页将 TP 的扩展问题与三类优化分开：计算量对比不等于耗时预测；缓冲区和算子融合保留必要求和；Ring / MultiShot 比较通信阶段且明确 NVSwitch 条件；tile 流水图只表示执行顺序，不计算加速比。
 - 第 17 页介绍 Mega Kernel 的调度方式与取舍，不承诺所有中间数据留在片上。
-- 第 44 页统一为 π0.5 的 3-view 公开记录：RTX 4090 BF16 55.4 ms（FlashVLA 基线，H=50）；Thor BF16 约 135 ms（PhyAI，H=50，由 batch=1 吞吐 7.43 samples/s 换算）；Thor FP8 49.02 ms（FlashRT，H=10、完整 infer() P50）。均为 batch 1、10 步，但实现、H 和计时范围不同，不计算跨行加速比。原来的 2-view OpenPi / APXInf 数据已移除。右侧保留 Thor BF16 约 70 ms、FP8 30 ms 量级的目标。第 45 页为 UMA 与 Persistent MegaKernel 两步，对比逐算子 kernel 和常驻 worker。
+- 第 43 页以同步推理为背景，画出观测 → VLA 推理 → 动作执行的串行闭环，说明推理位于关键路径，加速有助于提升任务效率与成功率。只保留 PhyAI 的 π0.5 / Thor BF16 / 3-view 记录：H=50、10 步、batch=1，按论文 Figure 5 的 7.43 samples/s 换算约 135 ms/次。没有右下角时间线和点击步骤；推理频率不等于同步闭环频率。第 44 页为 UMA 与 Persistent MegaKernel 两步，对比逐算子 kernel 和常驻 worker。
 
 ## 案例来源
 
